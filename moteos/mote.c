@@ -30,7 +30,13 @@ static uint8_t s_in_drop_hook;
 
 #ifdef MOTE_TEST_INJECT_ENABLE
 static void (*s_test_inject)(void);
-#define MOTE_TEST_INJECT() ((s_test_inject != NULL) ? s_test_inject() : (void)0)
+/* do-while 形式：避免三元 void 分支（GCC 扩展），-pedantic 兼容 */
+#define MOTE_TEST_INJECT()                                                     \
+    do {                                                                       \
+        if (s_test_inject != NULL) {                                           \
+            s_test_inject();                                                   \
+        }                                                                      \
+    } while (0)
 void mote_test_inject_set(void (*fn)(void))
 {
     s_test_inject = fn;

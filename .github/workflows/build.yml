@@ -96,8 +96,9 @@ jobs:
 
       - name: Compile CH32V003 example against real WCH SDK
         run: |
-          # 钉住 SDK 提交，避免上游变更导致 CI 意外变红
-          git clone --depth 1 https://github.com/openwch/ch32v003 /tmp/ch32v003
+          # 钉住 SDK 提交，避免上游变更导致 CI 意外变红；单次 fetch 省一半网络
+          git init /tmp/ch32v003
+          git -C /tmp/ch32v003 remote add origin https://github.com/openwch/ch32v003
           git -C /tmp/ch32v003 fetch --depth 1 origin 2ac68039c911e0313e2625811b631a8e9e55b9c0
           git -C /tmp/ch32v003 checkout --detach FETCH_HEAD
           SDK=/tmp/ch32v003/EVT/EXAM/SRC

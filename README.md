@@ -17,6 +17,9 @@
   <a href="https://github.com/Lioyae/MoteOS/actions/workflows/build.yml">
     <img src="https://img.shields.io/github/actions/workflow/status/Lioyae/MoteOS/build.yml?style=for-the-badge" alt="Build Status">
   </a>
+  <a href="https://github.com/Lioyae/MoteOS/tags">
+    <img src="https://img.shields.io/github/v/tag/Lioyae/MoteOS?style=for-the-badge&color=2b6cb0" alt="Version">
+  </a>
   <a href="https://github.com/Lioyae/MoteOS">
     <img src="https://img.shields.io/badge/language-C99-2b6cb0?style=for-the-badge" alt="C99">
   </a>

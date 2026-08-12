@@ -1,5 +1,17 @@
 # 更新日志
 
+## v0.3.3 - 2026-08-13
+
+### 修复
+
+- 邮箱拷贝写侧改为字节存储：消除严格别名 UB（此前 `*(uint32_t *)d = w` 强转写入，字面上违反 C 标准）
+- `MOTE_TEST_INJECT` 宏改为 do-while 形式，`-pedantic` 兼容
+- CI：WCH SDK 改为单次 fetch（git init + fetch SHA），省一半网络时间
+
+### 其他
+
+- README（中英）新增 tag 版本徽章
+
 ## v0.3.2 - 2026-08-13
 
 ### 修复与加固

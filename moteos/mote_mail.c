@@ -25,7 +25,12 @@ static void mote_copy(void *dst, const void *src, uint16_t n)
                    | ((uint32_t)s[1] << 8)
                    | ((uint32_t)s[2] << 16)
                    | ((uint32_t)s[3] << 24);
-        *(uint32_t *)d = w;
+        /* 字节存储而非强转指针写入：规避严格别名 UB；
+         * 编译器 -Os 会自动合并为字存储 */
+        d[0] = (uint8_t)(w >> 0);
+        d[1] = (uint8_t)(w >> 8);
+        d[2] = (uint8_t)(w >> 16);
+        d[3] = (uint8_t)(w >> 24);
         d += 4;
         s += 4;
         n -= 4;
