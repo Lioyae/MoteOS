@@ -32,6 +32,7 @@ mote_status_t mote_task_start(uint16_t id)
     if (id >= s_task_count) {
         return MOTE_ERR_PARAM;
     }
+    MOTE_ASSERT(s_task_table[id].period_ms != 0); /* 0 会退化成每个 poll 都触发的忙循环 */
     for (uint8_t i = 0; i < MOTE_TASK_SLOT_MAX; i++) {
         if (s_slots[i].active && s_slots[i].id == id) {
             return MOTE_OK; /* 已启动 */

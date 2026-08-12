@@ -234,6 +234,7 @@ mote_status_t mote_timer_start_ex(mote_timer_t *t, uint16_t evt, void *param,
     if (t == NULL || ms == 0) {
         return MOTE_ERR_PARAM;
     }
+    MOTE_ASSERT(ms < 0x80000000u); /* 回绕比较的数学边界：上限约 24.8 天 */
     MOTE_ASSERT((uint8_t)policy <= MOTE_TIMER_POLICY_LATEST);
     mote_timer_stop(t); /* 重复 start 视为重启 */
     t->due = s_tick + ms;
@@ -275,7 +276,10 @@ mote_status_t mote_event_post_delayed(uint16_t evt, void *param, uint32_t ms)
 #if MOTE_DELAYED_MAX > 0
     int free_slot = -1;
     mote_status_t st;
-    mote_crit_state_t cs = mote_crit_enter();
+    mote_crit_state_t cs;
+
+    MOTE_ASSERT(ms < 0x80000000u); /* 回绕比较的数学边界：上限约 24.8 天 */
+    cs = mote_crit_enter();
 
     for (int i = 0; i < MOTE_DELAYED_MAX; i++) {
         if (!s_delayed[i].used && free_slot < 0) {
@@ -405,11 +409,24 @@ bool mote_poll(void)
     return false;
 }
 
+/* 临界区内检查并睡眠：消除"查空 → 中断投递 → WFI 漏睡"竞态。
+ * ARM/RISC-V 的 wfi 在 pending 中断存在时立即唤醒，
+ * 唤醒后先恢复中断再返回，事件不会睡过头 */
+static void mote_sleep(void)
+{
+    mote_crit_state_t cs = mote_crit_enter();
+
+    if (s_q.count == 0) {
+        mote_idle(); /* 在关中断状态下调用（契约见 mote.h） */
+    }
+    mote_crit_exit(cs);
+}
+
 void mote_loop(void)
 {
     for (;;) {
         if (!mote_poll()) {
-            mote_idle();
+            mote_sleep();
         }
     }
 }

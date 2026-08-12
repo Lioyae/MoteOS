@@ -72,6 +72,7 @@ typedef enum {
 #define MOTE_U32(p) ((uint32_t)(uintptr_t)(p))
 
 void mote_init(const mote_evt_entry_t *evt_table, uint16_t evt_count);
+/* 契约：仅允许启动时调用一次（不重置丢事件钩子与测试注入点） */
 
 /* 因队列满/事件无效而被丢弃的事件总数（用于可靠性监测） */
 uint32_t mote_dropped_count(void);
@@ -90,14 +91,20 @@ bool mote_poll(void);
 /* 永不返回的主循环：无事件时进 mote_idle() 低功耗 */
 void mote_loop(void);
 
-/* 由移植层提供：进低功耗（默认 wfi） */
+/* 由移植层提供：进低功耗。
+ * 契约：内核在关中断状态下调用本函数（临界区内），实现必须极短
+ * （wfi 级别）；pending 中断会唤醒 CPU，唤醒后内核先恢复中断。
+ * 深度睡眠（STOP/STANDBY 等会停掉 tick 时钟的模式）不支持，
+ * 需自行处理唤醒竞态与唤醒源 */
 void mote_idle(void);
 
 mote_status_t mote_event_post(uint16_t evt, void *param);
 mote_status_t mote_event_post_replace(uint16_t evt, void *param);
 mote_status_t mote_event_post_delayed(uint16_t evt, void *param, uint32_t ms);
 
-/* 由移植层的中断服务程序调用，周期 = MOTE_TICK_MS */
+/* 由移植层的中断服务程序调用，周期 = MOTE_TICK_MS。
+ * 契约：只允许单一 tick 中断源调用（默认 SysTick）。
+ * M0+ 上 32 位自增非原子，多个中断源并发调用会产生竞态 */
 void mote_tick(void);
 
 /* 设置系统节拍（多用于测试与对时） */
@@ -106,6 +113,7 @@ void mote_tick_set(uint32_t ticks);
 uint32_t mote_ticks(void);
 
 /* 启动定时器（默认策略：单次=RETRY 至少一次送达，周期=DROP 满队丢当次）。
+ * ms 上限 2^31-1（约 24.8 天，回绕比较的数学边界）。
  * 需要严格截止时间（超时检测）用 mote_timer_start_ex + MOTE_TIMER_POLICY_DROP，
  * 或保持默认并在 handler 内核对 mote_ticks()。 */
 mote_status_t mote_timer_start(mote_timer_t *t, uint16_t evt, void *param,
@@ -162,7 +170,10 @@ typedef struct {
 } mote_mail_t;
 
 #define MOTE_MAILBOX_DEF(name, evt_id, slot_count, item_bytes)                 \
-    static uint8_t name##_buf[(slot_count) * (item_bytes)];                    \
+    static uint8_t name##_buf[((slot_count) >= 1 && (slot_count) <= 255        \
+                               && (item_bytes) >= 1)                           \
+                                  ? (slot_count) * (item_bytes)                \
+                                  : -1];                                       \
     static mote_mail_t name = { (evt_id), (item_bytes), (slot_count), 0, 0,    \
                                 name##_buf }
 

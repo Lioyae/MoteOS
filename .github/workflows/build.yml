@@ -94,6 +94,19 @@ jobs:
           test "$RAM" -lt 512 || { echo "kernel ram too large"; exit 1; }
           rm -f *.o
 
+      - name: Compile STM32F103 example against real CMSIS headers
+        run: |
+          git init /tmp/cmsis5
+          git -C /tmp/cmsis5 remote add origin https://github.com/ARM-software/CMSIS_5
+          git -C /tmp/cmsis5 fetch --depth 1 origin 55b19837f5703e418ca37894d5745b1dc05e4c91
+          git -C /tmp/cmsis5 checkout --detach FETCH_HEAD
+          arm-none-eabi-gcc -std=c99 -Wall -Wextra -Werror -mcpu=cortex-m3 -mthumb \
+            -c moteos/mote.c moteos/mote_task.c moteos/mote_mail.c moteos/port/mote_port.c \
+            examples/stm32f103/main.c \
+            -Imoteos -Imoteos/port/cm3 \
+            -I/tmp/cmsis5/Device/ST/STM32F1xx/Include \
+            -I/tmp/cmsis5/Core/Include
+
       - name: Compile CH32V003 example against real WCH SDK
         run: |
           # 钉住 SDK 提交，避免上游变更导致 CI 意外变红；单次 fetch 省一半网络
