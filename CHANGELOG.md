@@ -1,5 +1,13 @@
 # 更新日志
 
+## v0.3.1 - 2026-08-13
+
+### 修复
+
+- CI RISC-V 工具链问题：新版 GCC 需显式 `zicsr` 扩展（`-march=rv32imc_zicsr`）
+- 内核移除 libc 依赖（邮箱拷贝改为内置字节循环），裸工具链/无 newlib 环境可编译
+- CI 改用 xpack riscv-none-elf-gcc（自带 newlib），支持真实 SDK 例程编译
+
 ## v0.3.0 - 2026-08-13
 
 ### 新增

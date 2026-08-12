@@ -48,7 +48,10 @@ jobs:
       - name: Install toolchains
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-arm-none-eabi gcc-riscv64-unknown-elf
+          sudo apt-get install -y gcc-arm-none-eabi
+          wget -q https://github.com/xpack-dev-tools/riscv-none-elf-gcc-xpack/releases/download/v15.2.0-1/xpack-riscv-none-elf-gcc-15.2.0-1-linux-x64.tar.gz
+          tar xf xpack-riscv-none-elf-gcc-15.2.0-1-linux-x64.tar.gz -C /opt
+          echo "/opt/xpack-riscv-none-elf-gcc-15.2.0-1/bin" >> "$GITHUB_PATH"
 
       - name: Compile Cortex-M0+ (thumb, -Os, size check)
         run: |
@@ -72,12 +75,12 @@ jobs:
 
       - name: Compile RISC-V RV32 (WCH QingKe, -Os, size check)
         run: |
-          riscv64-unknown-elf-gcc -std=c99 -Wall -Wextra -Werror -Os -march=rv32imc -mabi=ilp32 \
+          riscv-none-elf-gcc -std=c99 -Wall -Wextra -Werror -Os -march=rv32imc_zicsr -mabi=ilp32 \
             -c moteos/mote.c moteos/mote_task.c moteos/mote_mail.c moteos/port/mote_port.c \
             -Imoteos -Imoteos/port/ch32v -Itests/stubs
-          riscv64-unknown-elf-size -t mote.o mote_task.o mote_mail.o
-          TEXT=$(riscv64-unknown-elf-size -t mote.o mote_task.o mote_mail.o | tail -1 | awk '{print $1}')
-          RAM=$(riscv64-unknown-elf-size -t mote.o mote_task.o mote_mail.o | tail -1 | awk '{print $2+$3}')
+          riscv-none-elf-size -t mote.o mote_task.o mote_mail.o
+          TEXT=$(riscv-none-elf-size -t mote.o mote_task.o mote_mail.o | tail -1 | awk '{print $1}')
+          RAM=$(riscv-none-elf-size -t mote.o mote_task.o mote_mail.o | tail -1 | awk '{print $2+$3}')
           echo "rv32 kernel: text=${TEXT}B ram=${RAM}B"
           test "$TEXT" -lt 2560 || { echo "kernel text too large"; exit 1; }
           test "$RAM" -lt 512 || { echo "kernel ram too large"; exit 1; }
@@ -88,7 +91,7 @@ jobs:
           git clone --depth 1 https://github.com/openwch/ch32v003 /tmp/ch32v003
           SDK=/tmp/ch32v003/EVT/EXAM/SRC
           USER=/tmp/ch32v003/EVT/EXAM/ADC/ADC_DMA/User
-          riscv64-unknown-elf-gcc -std=c99 -Wall -Wextra -Werror -march=rv32imc -mabi=ilp32 \
+          riscv-none-elf-gcc -std=c99 -Wall -Wextra -Werror -march=rv32imc_zicsr -mabi=ilp32 \
             -c moteos/mote.c moteos/mote_task.c moteos/mote_mail.c moteos/port/mote_port.c \
             examples/ch32v003/main.c \
             -Imoteos -Imoteos/port/ch32v \
