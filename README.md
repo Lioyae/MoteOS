@@ -66,7 +66,7 @@ MoteOS 是面向小容量单片机（2KB RAM / 16KB Flash 级别）的 C99 事�
 | 邮箱 | 静态槽深拷贝，入箱与事件入队在同一临界区原子完成（全有或全无，无竞态窗口）（可选编译） |
 | 低功耗 | 队列空闲自动进入 `mote_idle()`（默认 wfi），tick 中断唤醒 |
 | 临界区 | 保存/恢复式（PRIMASK / INTSYSCR），支持嵌套 |
-| 可观测性 | `mote_dropped_count()` 统一丢事件计数 + `mote_set_drop_hook()` 丢事件回调 |
+| 可观测性 | `mote_dropped_count()` 统一丢事件计数 + `mote_set_drop_hook()` 丢事件回调（钩子仅限事件/邮箱 API） |
 
 ## 快速开始
 

@@ -533,7 +533,7 @@ ID 就是值班表的下标，表按"最大 ID+1"占 Flash。ID 写成 200 号�
 | LED 完全不闪 | tick 没接上 | `SysTick_Config` 调了没？`mote_port.c` 加工程没？ |
 | 事件递了没反应 | 值班表没登记 / ID 超界 | `[EVT_X] = MOTE_ENTRY(...)` 写了没？表大小传对没？ |
 | 偶尔丢数据 | 队列/柜子小了 | `MOTE_EVT_QUEUE_SIZE`、邮箱槽数调大，注意返回值 |
-| 想监控丢了多少事件 | — | 读 `mote_dropped_count()`：因队列满/事件无效被丢弃的累计数 |
+| 想监控丢了多少事件 | — | 读 `mote_dropped_count()`：因队列满/事件无效被丢弃的累计数。想知道"丢的是哪个事件"，用 `mote_set_drop_hook()` 注册回调（注意：钩子在关中断上下文运行，只允许事件/邮箱 API，禁止定时器/任务 API） |
 | 中断里改全局变量偶发抽风 | 中断和 handler 抢数据 | 数据只走纸条/柜子传，共享变量加临界区 |
 | 省不了电 | `mote_idle` 没生效 | 见移植教程 FAQ Q6 |
 | 系统周期性卡一下 | 某个 handler 太慢 | 用 `mote_ticks()` 在 handler 头尾打点计时 |

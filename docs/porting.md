@@ -438,7 +438,8 @@ tick 变成 10ms 一拍，`SysTick_Config(SystemCoreClock / (1000 / MOTE_TICK_MS
 
 ## 第 7 章：移植成功检查清单
 
-- [ ] 编译 0 error 0 warning（开 `-Wall` 前提下）
+- [ ] 编译 0 error 0 warning（开 `-Wall -Wextra -Werror`，与 CI 同口径）
+- [ ] 内核体积核对：map 文件里内核 text <2.5KB、RAM <512B（实测 RV32EC 2.0KB/280B，见 README）
 - [ ] map 文件里 `SysTick_Handler` 只出现一次（在 mote_port.o 里）
 - [ ] LED 闪烁周期用逻辑分析仪/示波器实测 ≈ 设定值
 - [ ] 串口高波特率（115200 以上）连续收发不丢字

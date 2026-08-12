@@ -66,7 +66,7 @@ MoteOS is a C99 event-driven cooperative kernel for small MCUs (2KB RAM / 16KB F
 | Mailbox | Static slots with deep copy; slot insert and event enqueue are atomic within one critical section (all-or-nothing, no race window) (optional) |
 | Low power | Enters `mote_idle()` (wfi by default) when idle; woken by the tick interrupt |
 | Critical section | Save/restore style (PRIMASK / INTSYSCR), nesting-safe |
-| Observability | `mote_dropped_count()` unified drop counter + `mote_set_drop_hook()` drop callback |
+| Observability | `mote_dropped_count()` unified drop counter + `mote_set_drop_hook()` drop callback (event/mailbox APIs only inside the hook) |
 
 ## Quick Start
 
