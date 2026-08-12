@@ -93,7 +93,9 @@ static void test_send_rollback_on_queue_full(void)
         TEST_ASSERT(mote_event_post(1, MOTE_P(i)) == MOTE_OK);
     }
     /* 队列满：send 必须整体失败，邮箱不得滞留数据 */
+    uint32_t d0 = mote_dropped_count();
     TEST_ASSERT(mote_mail_send(&mb, &data, 1) == MOTE_ERR_FULL);
+    TEST_ASSERT(mote_dropped_count() == d0 + 1); /* 口径统一：拒绝计入丢弃 */
     TEST_ASSERT(mote_mail_recv(&mb, buf) == -1);
 
     /* 队列清空后 send 恢复正常 */

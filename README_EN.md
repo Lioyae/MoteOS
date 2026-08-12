@@ -35,8 +35,8 @@
 MoteOS is a C99 event-driven cooperative kernel for small MCUs (2KB RAM / 16KB Flash class).
 
 - No assembly, no dynamic memory allocation, no blocking delay APIs
-- All RAM/Flash usage is fixed at compile time and verifiable by the linker
-- Supports ARM Cortex-M0+/M3 and RISC-V; interrupt latency is affected only by the tick interrupt
+- All RAM/Flash usage is fixed at compile time; CI cross-compiles and asserts kernel size
+- Supports ARM Cortex-M0+/M3 and RISC-V; interrupt latency = tick interrupt + microsecond critical sections of event enqueue / mailbox copy (proportional to mailbox item_size)
 
 ## Supported Platforms
 
@@ -63,11 +63,12 @@ Baseline: CH32V003 (16KB Flash / 2KB RAM, all modules enabled).
 |---|---|
 | Event queue | `mote_event_post` / `mote_event_post_replace` (latest wins per ID) / `mote_event_post_delayed`; drop counter `mote_dropped_count()` |
 | Dispatch table | C99 designated initializers; event ID is the index; O(1) dispatch; table lives in Flash |
-| Timers | Statically defined; 32-bit wraparound safe; auto-post events on expiry; one-shot timers retry instead of vanishing when the queue is full |
-| Task layer | Descriptors in Flash (handler + ctx + period), state slot pool in RAM; inactive tasks consume no RAM (optional) |
-| Mailbox | Static slots with deep copy; fill from ISR, drain from handler; rolls back if event post fails (optional) |
+| Timers | Statically defined; 32-bit wraparound safe; auto-post events on expiry; one-shot timers are "at-least-once" (retry when the queue is full); periodic timers drop and count the missed beat |
+| Task layer | Periodic-callback convenience layer: descriptors in Flash (handler + ctx + period), state slot pool in RAM; inactive tasks consume no RAM (optional) |
+| Mailbox | Static slots with deep copy; slot insert and event enqueue are atomic within one critical section (all-or-nothing, no race window) (optional) |
 | Low power | Enters `mote_idle()` (wfi by default) when idle; woken by the tick interrupt |
 | Critical section | Save/restore style (PRIMASK / INTSYSCR), nesting-safe |
+| Observability | `mote_dropped_count()` unified drop counter + `mote_set_drop_hook()` drop callback |
 
 ## Quick Start
 

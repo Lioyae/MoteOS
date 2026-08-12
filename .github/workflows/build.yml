@@ -12,16 +12,72 @@ on:
     branches: [main]
 
 jobs:
-  test:
+  host-tests:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - name: Configure
-        run: cmake -S . -B build
+        run: cmake -S . -B build -DCMAKE_C_FLAGS="-Werror"
 
       - name: Build
         run: cmake --build build
 
       - name: Test
         run: ctest --test-dir build --output-on-failure
+
+  sanitizers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S . -B build-san -DCMAKE_C_FLAGS="-Werror -fsanitize=address,undefined -fno-omit-frame-pointer"
+
+      - name: Build
+        run: cmake --build build-san
+
+      - name: Test
+        run: ctest --test-dir build-san --output-on-failure
+
+  cross-compile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchains
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-none-eabi gcc-riscv64-unknown-elf
+
+      - name: Compile Cortex-M0+ (thumb)
+        run: |
+          arm-none-eabi-gcc -std=c99 -Wall -Wextra -Werror -mcpu=cortex-m0plus -mthumb \
+            -c moteos/mote.c moteos/mote_task.c moteos/mote_mail.c moteos/port/mote_port.c \
+            -Imoteos -Imoteos/port/cm0plus -Itests/stubs
+          arm-none-eabi-size -t mote.o mote_task.o mote_mail.o
+          TEXT=$(arm-none-eabi-size -t mote.o mote_task.o mote_mail.o | tail -1 | awk '{print $1}')
+          RAM=$(arm-none-eabi-size -t mote.o mote_task.o mote_mail.o | tail -1 | awk '{print $2+$3}')
+          echo "m0plus kernel: text=${TEXT}B ram=${RAM}B"
+          test "$TEXT" -lt 6144 || { echo "kernel text too large"; exit 1; }
+          test "$RAM" -lt 1024 || { echo "kernel ram too large"; exit 1; }
+          rm -f *.o
+
+      - name: Compile Cortex-M3 (thumb)
+        run: |
+          arm-none-eabi-gcc -std=c99 -Wall -Wextra -Werror -mcpu=cortex-m3 -mthumb \
+            -c moteos/mote.c moteos/mote_task.c moteos/mote_mail.c moteos/port/mote_port.c \
+            -Imoteos -Imoteos/port/cm3 -Itests/stubs
+          rm -f *.o
+
+      - name: Compile RISC-V RV32 (WCH QingKe)
+        run: |
+          riscv64-unknown-elf-gcc -std=c99 -Wall -Wextra -Werror -march=rv32imc -mabi=ilp32 \
+            -c moteos/mote.c moteos/mote_task.c moteos/mote_mail.c moteos/port/mote_port.c \
+            -Imoteos -Imoteos/port/ch32v -Itests/stubs
+          riscv64-unknown-elf-size -t mote.o mote_task.o mote_mail.o
+          TEXT=$(riscv64-unknown-elf-size -t mote.o mote_task.o mote_mail.o | tail -1 | awk '{print $1}')
+          RAM=$(riscv64-unknown-elf-size -t mote.o mote_task.o mote_mail.o | tail -1 | awk '{print $2+$3}')
+          echo "rv32ec kernel: text=${TEXT}B ram=${RAM}B"
+          test "$TEXT" -lt 6144 || { echo "kernel text too large"; exit 1; }
+          test "$RAM" -lt 1024 || { echo "kernel ram too large"; exit 1; }

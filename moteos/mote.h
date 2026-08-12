@@ -67,6 +67,11 @@ void mote_init(const mote_evt_entry_t *evt_table, uint16_t evt_count);
 /* 因队列满/事件无效而被丢弃的事件总数（用于可靠性监测） */
 uint32_t mote_dropped_count(void);
 
+/* 丢事件钩子：每丢弃一次事件回调一次。
+ * 注意：钩子在关中断上下文中被调用，必须极短且不能调用内核 API */
+typedef void (*mote_drop_hook_t)(uint16_t evt);
+void mote_set_drop_hook(mote_drop_hook_t hook);
+
 /* 主循环单步：处理定时器/任务，分发一个事件；返回是否分发了事件 */
 bool mote_poll(void);
 
@@ -88,13 +93,24 @@ void mote_tick_set(uint32_t ticks);
 
 uint32_t mote_ticks(void);
 
+/* 启动定时器。
+ * 周期定时器：队列满时当次到期事件丢弃（计入 mote_dropped_count）。
+ * 单次定时器：至少一次送达语义——队列满时保留重试，事件延迟送达但绝不蒸发；
+ * 需要严格截止时间（如超时检测）时，请在 handler 内核对 mote_ticks()。 */
 mote_status_t mote_timer_start(mote_timer_t *t, uint16_t evt, void *param,
                                uint32_t ms, bool periodic);
 mote_status_t mote_timer_stop(mote_timer_t *t);
 mote_status_t mote_timer_restart(mote_timer_t *t, uint32_t ms);
 
-#if MOTE_ENABLE_TASK
+/* ---- 内部接口（内核模块间使用，应用代码不要直接调用） ---- */
 
+/* 在已进入临界区的上下文中入队；失败自动计入丢弃统计 */
+mote_status_t mote_event_enqueue(uint16_t evt, void *param);
+
+/* 记录一次丢弃（统一统计口径并触发钩子） */
+void mote_note_dropped(uint16_t evt);
+
+#if MOTE_ENABLE_TASK
 typedef struct {
     mote_handler_t handler;
     void *ctx;        /* 原样传给 handler 的第三个参数 */

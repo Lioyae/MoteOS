@@ -35,8 +35,8 @@
 MoteOS 是面向小容量单片机（2KB RAM / 16KB Flash 级别）的 C99 事件驱动协作式内核。
 
 - 无汇编、无动态内存分配、无阻塞延时 API
-- 全部 RAM/Flash 用量在编译期确定，链接器可验证
-- 支持 ARM Cortex-M0+/M3 与 RISC-V，中断响应仅受 tick 中断影响
+- 全部 RAM/Flash 用量在编译期确定，链接器可验证，CI 交叉编译并断言内核体积
+- 支持 ARM Cortex-M0+/M3 与 RISC-V；中断延迟 = tick 中断 + 事件入队/邮箱拷贝的微秒级临界区（与邮箱 item_size 成正比）
 
 ## 支持平台
 
@@ -63,11 +63,12 @@ MoteOS 是面向小容量单片机（2KB RAM / 16KB Flash 级别）的 C99 事�
 |---|---|
 | 事件队列 | `mote_event_post` / `mote_event_post_replace`（同 ID 只留最新）/ `mote_event_post_delayed`；内置丢弃计数 `mote_dropped_count()` |
 | 注册表 | C99 指定初始化器，事件 ID 即下标，O(1) 派发，表常驻 Flash |
-| 定时器 | 静态定义；32 位回绕安全；到期自动投递事件；队列满时单次定时器自动重试不蒸发 |
-| 任务层 | 描述符在 Flash（handler + ctx + 周期），状态槽池在 RAM，未启动的任务不占 RAM（可选编译） |
-| 邮箱 | 静态槽深拷贝，中断放货、handler 取货；事件投递失败自动回滚（可选编译） |
+| 定时器 | 静态定义；32 位回绕安全；到期自动投递事件；单次定时器"至少一次"送达（队列满时延迟重试）；周期定时器满队丢当次并计数 |
+| 任务层 | 周期回调便捷层：描述符在 Flash（handler + ctx + 周期），状态槽池在 RAM，未启动的任务不占 RAM（可选编译） |
+| 邮箱 | 静态槽深拷贝，入箱与事件入队在同一临界区原子完成（全有或全无，无竞态窗口）（可选编译） |
 | 低功耗 | 队列空闲自动进入 `mote_idle()`（默认 wfi），tick 中断唤醒 |
 | 临界区 | 保存/恢复式（PRIMASK / INTSYSCR），支持嵌套 |
+| 可观测性 | `mote_dropped_count()` 统一丢事件计数 + `mote_set_drop_hook()` 丢事件回调 |
 
 ## 快速开始
 

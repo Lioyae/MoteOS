@@ -19,8 +19,12 @@ mote_status_t mote_mail_send(mote_mail_t *mb, const void *data, uint16_t len)
         return MOTE_ERR_PARAM;
     }
 
+    /* 入箱与事件入队必须在同一个临界区内完成：
+     * 中断不可能插进拷贝与入队之间，回滚也是原子的，
+     * 杜绝"数据已入箱但事件没送达"与"回滚挤掉他人数据"两类竞态 */
     cs = mote_crit_enter();
     if (mb->count >= mb->slots) {
+        mote_note_dropped(mb->evt); /* 口径统一：被拒绝的入箱也计入 */
         st = MOTE_ERR_FULL;
     } else {
         uint16_t n = (len > mb->item_size) ? mb->item_size : len;
@@ -28,18 +32,13 @@ mote_status_t mote_mail_send(mote_mail_t *mb, const void *data, uint16_t len)
         MOTE_ASSERT(mb->count < mb->slots);
         memcpy(&mb->buf[idx * mb->item_size], data, n);
         mb->count++;
-        st = MOTE_OK;
+        st = mote_event_enqueue(mb->evt, (void *)mb);
+        if (st != MOTE_OK) {
+            mb->count--; /* 同一临界区内回滚：全有或全无 */
+        }
     }
     mote_crit_exit(cs);
 
-    if (st == MOTE_OK && mote_event_post(mb->evt, (void *)mb) != MOTE_OK) {
-        /* 数据已入箱但事件投递失败：回滚入箱操作。
-         * 保证 send 全有或全无，杜绝"有货无通知"的滞留 */
-        cs = mote_crit_enter();
-        mb->count--;
-        mote_crit_exit(cs);
-        return MOTE_ERR_FULL;
-    }
     return st;
 }
 

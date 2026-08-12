@@ -137,6 +137,45 @@ static void test_crit_nesting(void)
     TEST_ASSERT(mote_crit_active() == 0);
 }
 
+static uint16_t s_hook_evt;
+static uint32_t s_hook_calls;
+
+static void drop_hook(uint16_t evt)
+{
+    s_hook_evt = evt;
+    s_hook_calls++;
+}
+
+static void test_drop_hook(void)
+{
+    mote_init(table, 2);
+    s_hook_calls = 0;
+    mote_set_drop_hook(drop_hook);
+
+    for (int i = 0; i < MOTE_EVT_QUEUE_SIZE; i++) {
+        TEST_ASSERT(mote_event_post(0, MOTE_P(i)) == MOTE_OK);
+    }
+    TEST_ASSERT(mote_event_post(0, MOTE_P(9)) == MOTE_ERR_FULL);
+    TEST_ASSERT(s_hook_calls == 1);
+    TEST_ASSERT(s_hook_evt == 0);
+    TEST_ASSERT(mote_dropped_count() == 1);
+
+    /* 未注册事件丢弃也触发钩子 */
+    for (int i = 0; i < MOTE_EVT_QUEUE_SIZE; i++) {
+        TEST_ASSERT(mote_poll() == true);
+    }
+    TEST_ASSERT(mote_event_post(7, MOTE_P(1)) == MOTE_OK);
+    TEST_ASSERT(mote_poll() == true);
+    TEST_ASSERT(s_hook_calls == 2);
+    TEST_ASSERT(s_hook_evt == 7);
+
+    /* 取消钩子后不再回调 */
+    mote_set_drop_hook(NULL);
+    TEST_ASSERT(mote_event_post(9, MOTE_P(1)) == MOTE_OK);
+    TEST_ASSERT(mote_poll() == true);
+    TEST_ASSERT(s_hook_calls == 2);
+}
+
 void suite_queue(void)
 {
     test_post_and_dispatch();
@@ -146,5 +185,6 @@ void suite_queue(void)
     test_unregistered_id_dropped();
     test_null_handler_dropped();
     test_dropped_count();
+    test_drop_hook();
     test_crit_nesting();
 }

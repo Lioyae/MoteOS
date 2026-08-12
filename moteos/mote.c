@@ -25,6 +25,7 @@ static volatile uint32_t s_tick;
 static mote_timer_t *s_timers;
 
 static uint32_t s_dropped;
+static mote_drop_hook_t s_drop_hook;
 
 #if MOTE_DELAYED_MAX > 0
 static struct {
@@ -83,18 +84,35 @@ uint32_t mote_dropped_count(void)
     return n;
 }
 
+void mote_set_drop_hook(mote_drop_hook_t hook)
+{
+    s_drop_hook = hook;
+}
+
+void mote_note_dropped(uint16_t evt)
+{
+    s_dropped++;
+    if (s_drop_hook != NULL) {
+        s_drop_hook(evt);
+    }
+}
+
+mote_status_t mote_event_enqueue(uint16_t evt, void *param)
+{
+    if (s_q.count >= MOTE_EVT_QUEUE_SIZE) {
+        mote_note_dropped(evt);
+        return MOTE_ERR_FULL;
+    }
+    mote_q_push(evt, param);
+    return MOTE_OK;
+}
+
 mote_status_t mote_event_post(uint16_t evt, void *param)
 {
     mote_status_t st;
     mote_crit_state_t cs = mote_crit_enter();
 
-    if (s_q.count >= MOTE_EVT_QUEUE_SIZE) {
-        s_dropped++;
-        st = MOTE_ERR_FULL;
-    } else {
-        mote_q_push(evt, param);
-        st = MOTE_OK;
-    }
+    st = mote_event_enqueue(evt, param);
     mote_crit_exit(cs);
     return st;
 }
@@ -114,11 +132,13 @@ mote_status_t mote_event_post_replace(uint16_t evt, void *param)
         }
     }
     if (s_q.count >= MOTE_EVT_QUEUE_SIZE) {
-        s_dropped++;
         st = MOTE_ERR_FULL;
     } else {
         mote_q_push(evt, param);
         st = MOTE_OK;
+    }
+    if (st == MOTE_ERR_FULL) {
+        mote_note_dropped(evt);
     }
     mote_crit_exit(cs);
     return st;
@@ -224,6 +244,7 @@ mote_status_t mote_event_post_delayed(uint16_t evt, void *param, uint32_t ms)
         }
     }
     if (free_slot < 0) {
+        mote_note_dropped(evt); /* 口径统一：被拒绝的延时投递也计入 */
         st = MOTE_ERR_FULL;
     } else {
         s_delayed[free_slot].used = 1;
@@ -310,7 +331,7 @@ bool mote_poll(void)
         /* 未注册/越界事件：安全丢弃并计数 */
         MOTE_ASSERT(evt < s_evt_count);
         cs = mote_crit_enter();
-        s_dropped++;
+        mote_note_dropped(evt);
         mote_crit_exit(cs);
         return true;
     }
