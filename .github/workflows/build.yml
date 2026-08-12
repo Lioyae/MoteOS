@@ -23,8 +23,12 @@ jobs:
       - name: Build
         run: cmake --build build
 
-      - name: Test
-        run: ctest --test-dir build --output-on-failure
+      - name: Test (unit + multi-seed interleave)
+        run: |
+          ctest --test-dir build --output-on-failure
+          for i in $(seq 1 20); do
+            MOTE_TEST_SEED=$i ./build/test_moteos || exit 1
+          done
 
   sanitizers:
     runs-on: ubuntu-latest
@@ -38,7 +42,11 @@ jobs:
         run: cmake --build build-san
 
       - name: Test
-        run: ctest --test-dir build-san --output-on-failure
+        run: |
+          ctest --test-dir build-san --output-on-failure
+          for i in $(seq 1 5); do
+            MOTE_TEST_SEED=$i ./build-san/test_moteos || exit 1
+          done
 
   cross-compile:
     runs-on: ubuntu-latest
@@ -88,7 +96,10 @@ jobs:
 
       - name: Compile CH32V003 example against real WCH SDK
         run: |
+          # 钉住 SDK 提交，避免上游变更导致 CI 意外变红
           git clone --depth 1 https://github.com/openwch/ch32v003 /tmp/ch32v003
+          git -C /tmp/ch32v003 fetch --depth 1 origin 2ac68039c911e0313e2625811b631a8e9e55b9c0
+          git -C /tmp/ch32v003 checkout --detach FETCH_HEAD
           SDK=/tmp/ch32v003/EVT/EXAM/SRC
           USER=/tmp/ch32v003/EVT/EXAM/ADC/ADC_DMA/User
           riscv-none-elf-gcc -std=c99 -Wall -Wextra -Werror -march=rv32imc_zicsr_zifencei -mabi=ilp32 \

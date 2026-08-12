@@ -7,12 +7,16 @@
 
 #include "mote.h"
 #include "mote_test.h"
+#include <stdlib.h>
 
 /* 单线程交错测试骨架：
  * 用伪随机序列在"主循环操作"与"伪中断操作"之间交错执行，
  * 伪中断遵守硬件规则——临界区内不执行。
+ * 开启 MOTE_TEST_INJECT_ENABLE 时，内核会在 API 内部窗口
+ * 回调注入点，实现更细粒度的交错。
  * 验证内核并发语义的一致性：每次投递尝试要么最终被派发、
- * 要么被计数丢弃；邮箱无滞留；临界区不泄漏。 */
+ * 要么被计数丢弃；邮箱无滞留；临界区不泄漏。
+ * 种子默认固定；设环境变量 MOTE_TEST_SEED 可换轨迹（CI 多种子跑）。 */
 
 #define IV_EVT_MAIL  0
 #define IV_EVT_PLAIN 1
@@ -60,6 +64,24 @@ static uint32_t iv_rand(void)
     return s_rng;
 }
 
+/* 注入点：内核 API 内部窗口触发的伪中断（有防递归保护） */
+static void iv_do_isr(uint32_t *attempts);
+
+#ifdef MOTE_TEST_INJECT_ENABLE
+static uint8_t s_injecting;
+static uint32_t s_attempts;
+
+static void iv_inject(void)
+{
+    if (s_injecting || mote_crit_active() != 0) {
+        return; /* 防递归；且临界区内 ISR 不执行（硬件语义） */
+    }
+    s_injecting = 1;
+    iv_do_isr(&s_attempts);
+    s_injecting = 0;
+}
+#endif
+
 /* 伪中断：模拟硬件行为，临界区内不可抢占 */
 static void iv_do_isr(uint32_t *attempts)
 {
@@ -102,10 +124,20 @@ static void test_interleave_consistency(void)
     uint32_t attempts = 0;
     uint32_t poll_true = 0;
     uint8_t buf[IV_SIZE];
+    const char *seed_env = getenv("MOTE_TEST_SEED");
+
+    if (seed_env != NULL) {
+        s_rng = (uint32_t)strtoul(seed_env, NULL, 10);
+    }
 
     mote_init(iv_table, 2);
     s_plain_calls = 0;
     s_recv_bytes = 0;
+
+#ifdef MOTE_TEST_INJECT_ENABLE
+    s_attempts = 0;
+    mote_test_inject_set(iv_inject);
+#endif
 
     for (int i = 0; i < 4000; i++) {
         if (iv_rand() & 1u) {
@@ -116,6 +148,11 @@ static void test_interleave_consistency(void)
         /* 内核不得泄漏临界区 */
         TEST_ASSERT(mote_crit_active() == 0);
     }
+
+#ifdef MOTE_TEST_INJECT_ENABLE
+    mote_test_inject_set(NULL);
+    attempts += s_attempts; /* 注入点内的尝试并入总账 */
+#endif
 
     while (mote_poll()) {
         poll_true++;

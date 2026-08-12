@@ -28,6 +28,17 @@ static uint32_t s_dropped;
 static mote_drop_hook_t s_drop_hook;
 static uint8_t s_in_drop_hook;
 
+#ifdef MOTE_TEST_INJECT_ENABLE
+static void (*s_test_inject)(void);
+#define MOTE_TEST_INJECT() ((s_test_inject != NULL) ? s_test_inject() : (void)0)
+void mote_test_inject_set(void (*fn)(void))
+{
+    s_test_inject = fn;
+}
+#else
+#define MOTE_TEST_INJECT() ((void)0)
+#endif
+
 #if MOTE_DELAYED_MAX > 0
 static struct {
     uint32_t due;
@@ -114,17 +125,23 @@ mote_status_t mote_event_enqueue(uint16_t evt, void *param)
 mote_status_t mote_event_post(uint16_t evt, void *param)
 {
     mote_status_t st;
-    mote_crit_state_t cs = mote_crit_enter();
+    mote_crit_state_t cs;
 
+    MOTE_TEST_INJECT();
+    cs = mote_crit_enter();
     st = mote_event_enqueue(evt, param);
     mote_crit_exit(cs);
+    MOTE_TEST_INJECT();
     return st;
 }
 
 mote_status_t mote_event_post_replace(uint16_t evt, void *param)
 {
     mote_status_t st;
-    mote_crit_state_t cs = mote_crit_enter();
+    mote_crit_state_t cs;
+
+    MOTE_TEST_INJECT();
+    cs = mote_crit_enter();
 
     /* 从新到旧查找：覆盖最新一条同 ID 事件（latest wins） */
     for (uint8_t i = s_q.count; i > 0; i--) {
@@ -132,6 +149,7 @@ mote_status_t mote_event_post_replace(uint16_t evt, void *param)
         if (s_q.items[idx].evt == evt) {
             s_q.items[idx].param = param;
             mote_crit_exit(cs);
+            MOTE_TEST_INJECT();
             return MOTE_OK;
         }
     }
@@ -145,6 +163,7 @@ mote_status_t mote_event_post_replace(uint16_t evt, void *param)
         mote_note_dropped(evt);
     }
     mote_crit_exit(cs);
+    MOTE_TEST_INJECT();
     return st;
 }
 
@@ -209,6 +228,7 @@ mote_status_t mote_timer_start_ex(mote_timer_t *t, uint16_t evt, void *param,
     if (t == NULL || ms == 0) {
         return MOTE_ERR_PARAM;
     }
+    MOTE_ASSERT((uint8_t)policy <= MOTE_TIMER_POLICY_LATEST);
     mote_timer_stop(t); /* 重复 start 视为重启 */
     t->due = s_tick + ms;
     t->period = periodic ? ms : 0;
@@ -267,12 +287,18 @@ mote_status_t mote_event_post_delayed(uint16_t evt, void *param, uint32_t ms)
         st = MOTE_OK;
     }
     mote_crit_exit(cs);
+    MOTE_TEST_INJECT();
     return st;
 #else
     (void)evt;
     (void)param;
     (void)ms;
-    mote_note_dropped(evt); /* 口径统一：功能关闭时视为拒绝 */
+    {
+        /* 与其它调用点一致：note_dropped 必须在临界区内调用 */
+        mote_crit_state_t cs = mote_crit_enter();
+        mote_note_dropped(evt); /* 口径统一：功能关闭时视为拒绝 */
+        mote_crit_exit(cs);
+    }
     return MOTE_ERR_FULL;
 #endif
 }

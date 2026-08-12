@@ -27,6 +27,8 @@ target_include_directories(test_moteos PRIVATE
     tests
 )
 
+target_compile_definitions(test_moteos PRIVATE MOTE_TEST_INJECT_ENABLE=1)
+
 target_compile_options(test_moteos PRIVATE -Wall -Wextra -Werror)
 
 add_test(NAME moteos_unit COMMAND test_moteos)

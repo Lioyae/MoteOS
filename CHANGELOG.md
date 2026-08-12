@@ -1,5 +1,19 @@
 # 更新日志
 
+## v0.3.2 - 2026-08-13
+
+### 修复与加固
+
+- `mote_event_post_delayed` 禁用分支的丢弃计数包临界区（契约统一：note_dropped 调用方持临界区）
+- 邮箱拷贝由字节循环升级为对齐感知的 32 位字拷贝（头尾字节处理非对齐），临界区内延迟常数因子显著下降
+- `mote_timer_start_ex` 增加 policy 范围断言
+- drop hook 文档收紧：仅允许事件/邮箱类 API，禁止定时器/任务 API
+- CI：WCH SDK 钉 commit（2ac6803）；宿主机与 ASan 任务各跑 1+20 / 1+5 个随机种子
+
+### 测试
+
+- 交错测试支持内核内部注入点（`MOTE_TEST_INJECT_ENABLE`，发布构建零开销）与多种子轨迹
+
 ## v0.3.1 - 2026-08-13
 
 ### 修复
@@ -14,6 +28,7 @@
 
 - 定时器满队策略：`mote_timer_start_ex` + `MOTE_TIMER_POLICY_RETRY / DROP / LATEST`
   （至少一次送达 / 严格截止 / replace 语义只留最新）
+  注：`mote_timer_start` 默认策略为单次=RETRY、周期=DROP（与旧行为等价，兼容）
 - 交错测试骨架：随机交错主循环与伪中断操作，验证并发一致性（投递账目、邮箱无滞留、临界区不泄漏）
 - CI：真实 WCH SDK（openwch/ch32v003）编译 CH32V003 例程；体积断言收紧为 text <2.5KB / RAM <512B（-Os 实测）
 - drop hook 防重入保护

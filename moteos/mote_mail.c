@@ -9,14 +9,30 @@
 
 #if MOTE_ENABLE_MAILBOX
 
-/* 内核不依赖 libc：自带字节拷贝 */
-static void mote_memcpy8(void *dst, const void *src, uint16_t n)
+/* 内核不依赖 libc：对齐感知的拷贝（32 位字拷贝 + 头尾字节）。
+ * M0+/RV32EC 不支持非对齐访存，源地址未对齐时按字节组装字 */
+static void mote_copy(void *dst, const void *src, uint16_t n)
 {
     uint8_t *d = (uint8_t *)dst;
     const uint8_t *s = (const uint8_t *)src;
 
-    while (n--) {
+    while (n != 0 && ((uintptr_t)d & 3u) != 0u) {
         *d++ = *s++;
+        n--;
+    }
+    while (n >= 4) {
+        uint32_t w = (uint32_t)s[0]
+                   | ((uint32_t)s[1] << 8)
+                   | ((uint32_t)s[2] << 16)
+                   | ((uint32_t)s[3] << 24);
+        *(uint32_t *)d = w;
+        d += 4;
+        s += 4;
+        n -= 4;
+    }
+    while (n != 0) {
+        *d++ = *s++;
+        n--;
     }
 }
 
@@ -40,7 +56,7 @@ mote_status_t mote_mail_send(mote_mail_t *mb, const void *data, uint16_t len)
         uint16_t n = (len > mb->item_size) ? mb->item_size : len;
         uint8_t idx = (uint8_t)((mb->head + mb->count) % mb->slots);
         MOTE_ASSERT(mb->count < mb->slots);
-        mote_memcpy8(&mb->buf[idx * mb->item_size], data, n);
+        mote_copy(&mb->buf[idx * mb->item_size], data, n);
         mb->count++;
         st = mote_event_enqueue(mb->evt, (void *)mb);
         if (st != MOTE_OK) {
@@ -65,7 +81,7 @@ int mote_mail_recv(mote_mail_t *mb, void *data)
     if (mb->count == 0) {
         n = -1;
     } else {
-        mote_memcpy8(data, &mb->buf[mb->head * mb->item_size], mb->item_size);
+        mote_copy(data, &mb->buf[mb->head * mb->item_size], mb->item_size);
         mb->head = (uint8_t)((mb->head + 1) % mb->slots);
         mb->count--;
         n = mb->item_size;

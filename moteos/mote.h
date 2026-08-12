@@ -78,8 +78,9 @@ uint32_t mote_dropped_count(void);
 
 /* 丢事件钩子：每丢弃一次事件回调一次。
  * 注意：① 在关中断上下文中被调用，必须极短；
- *      ② 钩子内调用内核 API 是允许的（有防重入保护），
- *         但再次触发的丢弃不会递归回调本钩子 */
+ *      ② 钩子可能在中断上下文触发，只允许调用事件/邮箱类 API
+ *         （mote_event_post*、mote_mail_send），禁止定时器/任务 API；
+ *      ③ 钩子内再次触发的丢弃不会递归回调本钩子（防重入） */
 typedef void (*mote_drop_hook_t)(uint16_t evt);
 void mote_set_drop_hook(mote_drop_hook_t hook);
 
@@ -123,6 +124,13 @@ mote_status_t mote_event_enqueue(uint16_t evt, void *param);
 
 /* 记录一次丢弃（统一统计口径并触发钩子） */
 void mote_note_dropped(uint16_t evt);
+
+/* ---- 测试注入（仅定义 MOTE_TEST_INJECT_ENABLE 时可用）：
+ *      宿主机交错测试在 API 内部窗口插入"伪中断"执行点，
+ *      发布构建不编译、零开销 ---- */
+#ifdef MOTE_TEST_INJECT_ENABLE
+void mote_test_inject_set(void (*fn)(void));
+#endif
 
 #if MOTE_ENABLE_TASK
 typedef struct {
