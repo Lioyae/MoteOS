@@ -4,9 +4,12 @@
  * https://github.com/Lioyae/MoteOS
  * SPDX-License-Identifier: Apache-2.0
  */
+
 #include "mote.h"
 
 #ifdef MOTE_PORT_HOST
+
+uint32_t mote_host_primask;
 
 void mote_idle(void)
 {

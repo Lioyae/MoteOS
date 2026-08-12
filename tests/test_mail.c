@@ -25,6 +25,7 @@ static void mail_handler(uint16_t evt, void *param, void *ctx)
 
 static const mote_evt_entry_t table[] = {
     [0] = MOTE_ENTRY(mail_handler, NULL),
+    [1] = MOTE_ENTRY(NULL, NULL), /* 空 handler，用于占满队列 */
 };
 
 static void test_send_recv_roundtrip(void)
@@ -82,10 +83,35 @@ static void test_send_truncates(void)
     TEST_ASSERT(s_recv_buf[MB_SIZE - 1] == 0x5A);
 }
 
+static void test_send_rollback_on_queue_full(void)
+{
+    uint8_t data = 0x55;
+    static uint8_t buf[MB_SIZE];
+
+    mote_init(table, 2);
+    for (int i = 0; i < MOTE_EVT_QUEUE_SIZE; i++) {
+        TEST_ASSERT(mote_event_post(1, MOTE_P(i)) == MOTE_OK);
+    }
+    /* 队列满：send 必须整体失败，邮箱不得滞留数据 */
+    TEST_ASSERT(mote_mail_send(&mb, &data, 1) == MOTE_ERR_FULL);
+    TEST_ASSERT(mote_mail_recv(&mb, buf) == -1);
+
+    /* 队列清空后 send 恢复正常 */
+    for (int i = 0; i < MOTE_EVT_QUEUE_SIZE; i++) {
+        TEST_ASSERT(mote_poll() == true); /* 丢弃占位事件 */
+    }
+    s_recv_len = -1;
+    TEST_ASSERT(mote_mail_send(&mb, &data, 1) == MOTE_OK);
+    TEST_ASSERT(mote_poll() == true);
+    TEST_ASSERT(s_recv_len == MB_SIZE);
+    TEST_ASSERT(s_recv_buf[0] == 0x55);
+}
+
 void suite_mail(void)
 {
     test_send_recv_roundtrip();
     test_send_full();
     test_recv_empty();
     test_send_truncates();
+    test_send_rollback_on_queue_full();
 }

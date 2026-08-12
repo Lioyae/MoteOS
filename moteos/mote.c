@@ -4,6 +4,7 @@
  * https://github.com/Lioyae/MoteOS
  * SPDX-License-Identifier: Apache-2.0
  */
+
 #include "mote.h"
 
 typedef struct {
@@ -23,6 +24,8 @@ static uint16_t s_evt_count;
 static volatile uint32_t s_tick;
 static mote_timer_t *s_timers;
 
+static uint32_t s_dropped;
+
 #if MOTE_DELAYED_MAX > 0
 static struct {
     uint32_t due;
@@ -37,6 +40,7 @@ static struct {
 static void mote_q_push(uint16_t evt, void *param)
 {
     uint8_t idx = (uint8_t)((s_q.head + s_q.count) % MOTE_EVT_QUEUE_SIZE);
+    MOTE_ASSERT(s_q.count < MOTE_EVT_QUEUE_SIZE);
     s_q.items[idx].evt = evt;
     s_q.items[idx].param = param;
     s_q.count++;
@@ -62,6 +66,7 @@ void mote_init(const mote_evt_entry_t *evt_table, uint16_t evt_count)
     s_evt_count = evt_count;
     s_tick = 0;
     s_timers = NULL;
+    s_dropped = 0;
 #if MOTE_DELAYED_MAX > 0
     for (int i = 0; i < MOTE_DELAYED_MAX; i++) {
         s_delayed[i].used = 0;
@@ -69,42 +74,53 @@ void mote_init(const mote_evt_entry_t *evt_table, uint16_t evt_count)
 #endif
 }
 
+uint32_t mote_dropped_count(void)
+{
+    uint32_t n;
+    mote_crit_state_t cs = mote_crit_enter();
+    n = s_dropped;
+    mote_crit_exit(cs);
+    return n;
+}
+
 mote_status_t mote_event_post(uint16_t evt, void *param)
 {
     mote_status_t st;
+    mote_crit_state_t cs = mote_crit_enter();
 
-    MOTE_ENTER_CRITICAL();
     if (s_q.count >= MOTE_EVT_QUEUE_SIZE) {
+        s_dropped++;
         st = MOTE_ERR_FULL;
     } else {
         mote_q_push(evt, param);
         st = MOTE_OK;
     }
-    MOTE_EXIT_CRITICAL();
+    mote_crit_exit(cs);
     return st;
 }
 
 mote_status_t mote_event_post_replace(uint16_t evt, void *param)
 {
     mote_status_t st;
+    mote_crit_state_t cs = mote_crit_enter();
 
-    MOTE_ENTER_CRITICAL();
     /* 从新到旧查找：覆盖最新一条同 ID 事件（latest wins） */
     for (uint8_t i = s_q.count; i > 0; i--) {
         uint8_t idx = (uint8_t)((s_q.head + i - 1) % MOTE_EVT_QUEUE_SIZE);
         if (s_q.items[idx].evt == evt) {
             s_q.items[idx].param = param;
-            MOTE_EXIT_CRITICAL();
+            mote_crit_exit(cs);
             return MOTE_OK;
         }
     }
     if (s_q.count >= MOTE_EVT_QUEUE_SIZE) {
+        s_dropped++;
         st = MOTE_ERR_FULL;
     } else {
         mote_q_push(evt, param);
         st = MOTE_OK;
     }
-    MOTE_EXIT_CRITICAL();
+    mote_crit_exit(cs);
     return st;
 }
 
@@ -117,12 +133,18 @@ void mote_tick(void)
 
 void mote_tick_set(uint32_t ticks)
 {
+    mote_crit_state_t cs = mote_crit_enter();
     s_tick = ticks;
+    mote_crit_exit(cs);
 }
 
 uint32_t mote_ticks(void)
 {
-    return s_tick;
+    uint32_t t;
+    mote_crit_state_t cs = mote_crit_enter();
+    t = s_tick; /* M0+ 上 32 位读非原子，关中断保证完整性 */
+    mote_crit_exit(cs);
+    return t;
 }
 
 static void mote_timer_unlink(mote_timer_t *t)
@@ -194,8 +216,8 @@ mote_status_t mote_event_post_delayed(uint16_t evt, void *param, uint32_t ms)
 #if MOTE_DELAYED_MAX > 0
     int free_slot = -1;
     mote_status_t st;
+    mote_crit_state_t cs = mote_crit_enter();
 
-    MOTE_ENTER_CRITICAL();
     for (int i = 0; i < MOTE_DELAYED_MAX; i++) {
         if (!s_delayed[i].used && free_slot < 0) {
             free_slot = i;
@@ -210,7 +232,7 @@ mote_status_t mote_event_post_delayed(uint16_t evt, void *param, uint32_t ms)
         s_delayed[free_slot].param = param;
         st = MOTE_OK;
     }
-    MOTE_EXIT_CRITICAL();
+    mote_crit_exit(cs);
     return st;
 #else
     (void)evt;
@@ -231,11 +253,12 @@ static void mote_process_timers(void)
         if ((int32_t)(s_tick - t->due) >= 0) {
             if (t->period != 0) {
                 t->due = s_tick + t->period;
-                mote_event_post(t->evt, t->param);
-            } else {
-                mote_timer_unlink(t);
-                mote_event_post(t->evt, t->param);
+                mote_event_post(t->evt, t->param); /* 失败计丢失数 */
+            } else if (mote_event_post(t->evt, t->param) == MOTE_OK) {
+                mote_timer_unlink(t); /* 单次：送达才释放，满队自动重试 */
             }
+            /* 单次定时器在队列满时保留在链表（due 已过期），
+             * 每次 poll 重试直到事件入队 */
         }
         t = next;
     }
@@ -245,17 +268,17 @@ static void mote_process_timers(void)
         uint16_t evt;
         void *param;
         bool fire;
+        mote_crit_state_t cs = mote_crit_enter();
 
-        MOTE_ENTER_CRITICAL();
         fire = s_delayed[i].used && (int32_t)(s_tick - s_delayed[i].due) >= 0;
         if (fire) {
             s_delayed[i].used = 0;
             evt = s_delayed[i].evt;
             param = s_delayed[i].param;
         }
-        MOTE_EXIT_CRITICAL();
+        mote_crit_exit(cs);
         if (fire) {
-            mote_event_post(evt, param);
+            mote_event_post(evt, param); /* 失败计丢失数 */
         }
     }
 #endif
@@ -266,22 +289,29 @@ bool mote_poll(void)
     uint16_t evt;
     void *param;
     bool got;
+    mote_crit_state_t cs;
 
     mote_process_timers();
 #if MOTE_ENABLE_TASK
     mote_process_tasks();
 #endif
-    MOTE_ENTER_CRITICAL();
+    cs = mote_crit_enter();
     got = mote_q_pop(&evt, &param);
-    MOTE_EXIT_CRITICAL();
+    mote_crit_exit(cs);
 
     if (got) {
         if (evt < s_evt_count && s_evt_table != NULL) {
             const mote_evt_entry_t *e = &s_evt_table[evt];
             if (e->handler != NULL) {
                 e->handler(evt, param, e->ctx);
+                return true;
             }
         }
+        /* 未注册/越界事件：安全丢弃并计数 */
+        MOTE_ASSERT(evt < s_evt_count);
+        cs = mote_crit_enter();
+        s_dropped++;
+        mote_crit_exit(cs);
         return true;
     }
     return false;

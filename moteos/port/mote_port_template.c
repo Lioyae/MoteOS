@@ -16,8 +16,13 @@
  * 2) 提供 mote_idle()：进入芯片低功耗模式。
  *    ARM/RISC-V 内核一条 wfi 即可；其他架构换成对应指令。
  *
- * 3) 定义临界区宏 MOTE_ENTER_CRITICAL()/MOTE_EXIT_CRITICAL()：
- *    关全局中断 / 开全局中断。
+ * 3) 提供临界区 API（保存/恢复式，支持嵌套）：
+ *      mote_crit_state_t  中断状态类型
+ *      mote_crit_enter()  保存当前状态并关中断，返回保存的状态
+ *      mote_crit_exit(s)  恢复保存的状态（禁止无条件打开中断）
+ *      mote_crit_active() 查询当前是否处于关中断（1=关）
+ *    参考现成实现：Cortex-M 用 PRIMASK（port/cm0plus、port/cm3），
+ *    WCH RISC-V 用 INTSYSCR（port/ch32v），AVR 用 SREG。
  *
  * 把本文件改名为 mote_port.c 放进工程，并把本目录加入头文件搜索路径。
  */

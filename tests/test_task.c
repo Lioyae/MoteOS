@@ -10,6 +10,7 @@
 static uint32_t s_calls0;
 static uint32_t s_calls1;
 static uint16_t s_last_evt;
+static void *s_ctx_seen;
 
 static void tsk0(uint16_t evt, void *param, void *ctx)
 {
@@ -27,9 +28,16 @@ static void tsk1(uint16_t evt, void *param, void *ctx)
     s_last_evt = evt;
 }
 
+static void tsk_ctx(uint16_t evt, void *param, void *ctx)
+{
+    (void)evt;
+    (void)param;
+    s_ctx_seen = ctx;
+}
+
 static const mote_task_desc_t tasks[] = {
-    MOTE_TASK_DEF(10, tsk0),
-    MOTE_TASK_DEF(20, tsk1),
+    MOTE_TASK_DEF(10, tsk0, NULL),
+    MOTE_TASK_DEF(20, tsk1, NULL),
 };
 
 static void test_task_periodic(void)
@@ -83,12 +91,12 @@ static void test_task_slot_pool(void)
 {
     /* 槽数 = MOTE_TASK_SLOT_MAX；定义 6 个任务，同时活跃数不能超过槽数 */
     static const mote_task_desc_t many[] = {
-        MOTE_TASK_DEF(10, tsk0),
-        MOTE_TASK_DEF(10, tsk0),
-        MOTE_TASK_DEF(10, tsk0),
-        MOTE_TASK_DEF(10, tsk0),
-        MOTE_TASK_DEF(10, tsk0),
-        MOTE_TASK_DEF(10, tsk0),
+        MOTE_TASK_DEF(10, tsk0, NULL),
+        MOTE_TASK_DEF(10, tsk0, NULL),
+        MOTE_TASK_DEF(10, tsk0, NULL),
+        MOTE_TASK_DEF(10, tsk0, NULL),
+        MOTE_TASK_DEF(10, tsk0, NULL),
+        MOTE_TASK_DEF(10, tsk0, NULL),
     };
 
     mote_init(NULL, 0);
@@ -107,9 +115,29 @@ static void test_task_slot_pool(void)
     TEST_ASSERT(mote_task_start(4) == MOTE_OK); /* 空槽可复用 */
 }
 
+static void test_task_ctx(void)
+{
+    static uint32_t ctx_val = 1234;
+    static const mote_task_desc_t ctasks[] = {
+        MOTE_TASK_DEF(10, tsk_ctx, &ctx_val),
+    };
+
+    mote_init(NULL, 0);
+    mote_task_init(ctasks, 1);
+    s_ctx_seen = NULL;
+
+    TEST_ASSERT(mote_task_start(0) == MOTE_OK);
+    for (int i = 0; i < 10; i++) {
+        mote_tick();
+        mote_poll();
+    }
+    TEST_ASSERT(s_ctx_seen == &ctx_val);
+}
+
 void suite_task(void)
 {
     test_task_periodic();
     test_task_stop();
     test_task_slot_pool();
+    test_task_ctx();
 }

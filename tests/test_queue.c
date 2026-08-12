@@ -101,6 +101,42 @@ static void test_null_handler_dropped(void)
     TEST_ASSERT(s_last_evt == 0xFFFF);
 }
 
+static void test_dropped_count(void)
+{
+    mote_init(table, 2);
+    TEST_ASSERT(mote_dropped_count() == 0);
+    for (int i = 0; i < MOTE_EVT_QUEUE_SIZE; i++) {
+        TEST_ASSERT(mote_event_post(0, MOTE_P(i)) == MOTE_OK);
+    }
+    TEST_ASSERT(mote_event_post(0, MOTE_P(9)) == MOTE_ERR_FULL);
+    TEST_ASSERT(mote_event_post_replace(1, MOTE_P(8)) == MOTE_ERR_FULL);
+    TEST_ASSERT(mote_dropped_count() == 2);
+}
+
+static void test_crit_nesting(void)
+{
+    mote_init(table, 2);
+
+    /* 外部进入临界区后调用内核 API：内核内部的进入/退出
+     * 必须恢复调用方状态，而不是强行打开中断 */
+    mote_crit_state_t cs = mote_crit_enter();
+    TEST_ASSERT(mote_crit_active() == 1);
+    TEST_ASSERT(mote_event_post(0, MOTE_P(1)) == MOTE_OK);
+    TEST_ASSERT(mote_event_post_replace(0, MOTE_P(2)) == MOTE_OK);
+    TEST_ASSERT(mote_crit_active() == 1); /* 仍处于调用方关闭状态 */
+    mote_crit_exit(cs);
+    TEST_ASSERT(mote_crit_active() == 0);
+
+    /* 嵌套两层 */
+    mote_crit_state_t c1 = mote_crit_enter();
+    mote_crit_state_t c2 = mote_crit_enter();
+    TEST_ASSERT(mote_crit_active() == 1);
+    mote_crit_exit(c2);
+    TEST_ASSERT(mote_crit_active() == 1);
+    mote_crit_exit(c1);
+    TEST_ASSERT(mote_crit_active() == 0);
+}
+
 void suite_queue(void)
 {
     test_post_and_dispatch();
@@ -109,4 +145,6 @@ void suite_queue(void)
     test_replace_on_full_queue();
     test_unregistered_id_dropped();
     test_null_handler_dropped();
+    test_dropped_count();
+    test_crit_nesting();
 }

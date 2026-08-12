@@ -61,12 +61,13 @@ MoteOS 是面向小容量单片机（2KB RAM / 16KB Flash 级别）的 C99 事�
 
 | 模块 | 说明 |
 |---|---|
-| 事件队列 | `mote_event_post` / `mote_event_post_replace`（同 ID 只留最新）/ `mote_event_post_delayed` |
+| 事件队列 | `mote_event_post` / `mote_event_post_replace`（同 ID 只留最新）/ `mote_event_post_delayed`；内置丢弃计数 `mote_dropped_count()` |
 | 注册表 | C99 指定初始化器，事件 ID 即下标，O(1) 派发，表常驻 Flash |
-| 定时器 | 静态定义、无数量上限；32 位回绕安全；到期自动投递事件 |
-| 任务层 | 描述符在 Flash，状态槽池在 RAM，未启动的任务不占 RAM（可选编译） |
-| 邮箱 | 静态槽深拷贝，中断放货、handler 取货（可选编译） |
+| 定时器 | 静态定义；32 位回绕安全；到期自动投递事件；队列满时单次定时器自动重试不蒸发 |
+| 任务层 | 描述符在 Flash（handler + ctx + 周期），状态槽池在 RAM，未启动的任务不占 RAM（可选编译） |
+| 邮箱 | 静态槽深拷贝，中断放货、handler 取货；事件投递失败自动回滚（可选编译） |
 | 低功耗 | 队列空闲自动进入 `mote_idle()`（默认 wfi），tick 中断唤醒 |
+| 临界区 | 保存/恢复式（PRIMASK / INTSYSCR），支持嵌套 |
 
 ## 快速开始
 

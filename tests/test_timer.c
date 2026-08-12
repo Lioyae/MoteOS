@@ -153,6 +153,29 @@ static void test_post_delayed(void)
     TEST_ASSERT(mote_event_post_delayed(0, MOTE_P(10), 1) == MOTE_OK);
 }
 
+static void test_one_shot_survives_full_queue(void)
+{
+    static mote_timer_t t;
+
+    mote_init(table, 2);
+    s_calls = 0;
+    for (int i = 0; i < MOTE_EVT_QUEUE_SIZE; i++) {
+        TEST_ASSERT(mote_event_post(1, MOTE_P(i)) == MOTE_OK);
+    }
+    TEST_ASSERT(mote_timer_start(&t, 0, MOTE_P(7), 5, false) == MOTE_OK);
+    for (int i = 0; i < 5; i++) {
+        mote_tick();
+    }
+    /* 到期但队列满：事件未入队，定时器保留重试 */
+    for (int i = 0; i < MOTE_EVT_QUEUE_SIZE; i++) {
+        TEST_ASSERT(mote_poll() == true);
+    }
+    /* 队列空了，下一次 poll 定时器重试成功 */
+    TEST_ASSERT(mote_poll() == true);
+    TEST_ASSERT(s_last_param == 7);
+    TEST_ASSERT(mote_poll() == false); /* 单次定时器已释放 */
+}
+
 void suite_timer(void)
 {
     test_timer_one_shot();
@@ -161,4 +184,5 @@ void suite_timer(void)
     test_restart();
     test_tick_overflow();
     test_post_delayed();
+    test_one_shot_survives_full_queue();
 }

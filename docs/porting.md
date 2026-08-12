@@ -249,21 +249,48 @@ void mote_idle(void)
 CPU 睡着后，任何中断（包括 tick）都会把它叫醒，醒来继续干活，
 **不需要任何额外的唤醒逻辑**。
 
-### 4.3 临界区：关中断/开中断
+### 4.3 临界区：四个小函数（保存/恢复式）
 
-新建 `mote_port.h`：
+新建 `mote_port.h`，提供四个接口：
 
 ```c
 #ifndef MOTE_PORT_H
 #define MOTE_PORT_H
 
-#define MOTE_ENTER_CRITICAL()  关中断的函数名();
-#define MOTE_EXIT_CRITICAL()   开中断的函数名();
+typedef uint32_t mote_crit_state_t;          /* 中断状态类型 */
+
+static inline mote_crit_state_t mote_crit_enter(void)
+{
+    /* 1) 读出当前中断开关状态并保存 */
+    /* 2) 关全局中断 */
+    /* 3) 返回保存的状态 */
+}
+
+static inline void mote_crit_exit(mote_crit_state_t s)
+{
+    /* 恢复 s 里的中断状态（不是无条件打开！） */
+}
+
+static inline uint32_t mote_crit_active(void)
+{
+    /* 返回当前是否处于"关中断"（1=关，0=开） */
+}
 
 #endif
 ```
 
-换成你芯片自己的开关中断函数/指令即可（比如 AVR 的 `cli()/sei()`）。
+**为什么必须保存/恢复而不是"关/开"？**
+因为内核可能在你已经关了中断的上下文里运行（你自己的临界区、嵌套调用）。
+如果 exit 无条件打开中断，就会破坏调用方的原子性——这是经典的隐蔽 bug。
+保存/恢复式天然支持嵌套，怎么嵌套都不会错。
+
+**参考现成实现**（直接抄对应的）：
+
+| 内核 | 状态来源 | 实现 |
+|---|---|---|
+| Cortex-M0+/M3 | PRIMASK | `__get_PRIMASK()` / `__set_PRIMASK()`（见 `port/cm0plus`、`port/cm3`） |
+| WCH RISC-V | INTSYSCR（CSR 0x800） | `csrr/csrw 0x800`（见 `port/ch32v`） |
+| AVR 等 | 状态寄存器 SREG | `in`/`out` 指令保存恢复 SREG |
 
 ---
 
@@ -362,7 +389,7 @@ static void heartbeat(uint16_t evt, void *param, void *ctx)
 }
 
 static const mote_task_desc_t tasks[] = {
-    MOTE_TASK_DEF(1000, heartbeat),
+    MOTE_TASK_DEF(1000, heartbeat, NULL),
 };
 
 int main(void)

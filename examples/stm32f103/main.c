@@ -34,7 +34,7 @@ static mote_timer_t blink_timer;
 /* ---- 任务层描述符（Flash，不启动不占 RAM） ---- */
 static void heartbeat(uint16_t evt, void *param, void *ctx);
 static const mote_task_desc_t tasks[] = {
-    MOTE_TASK_DEF(1000, heartbeat),
+    MOTE_TASK_DEF(1000, heartbeat, NULL),
 };
 
 /* ---- 事件处理器 ---- */

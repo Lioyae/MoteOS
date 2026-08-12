@@ -66,8 +66,9 @@ void mote_process_tasks(void)
     for (uint8_t i = 0; i < MOTE_TASK_SLOT_MAX; i++) {
         mote_task_slot_t *s = &s_slots[i];
         if (s->active && (int32_t)(now - s->due) >= 0) {
-            s->due = now + s_task_table[s->id].period_ms;
-            s_task_table[s->id].handler(MOTE_EVT_TASK, NULL, NULL);
+            const mote_task_desc_t *d = &s_task_table[s->id];
+            s->due = now + d->period_ms;
+            d->handler(MOTE_EVT_TASK, NULL, d->ctx);
         }
     }
 }

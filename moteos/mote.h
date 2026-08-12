@@ -59,10 +59,13 @@ typedef struct mote_timer {
 
 /* 注册表项 / 值参转换宏 */
 #define MOTE_ENTRY(handler, ctx) { (handler), (ctx) }
-#define MOTE_P(v)   ((void *)(uint32_t)(v))
-#define MOTE_U32(p) ((uint32_t)(p))
+#define MOTE_P(v)   ((void *)(uintptr_t)(v))
+#define MOTE_U32(p) ((uint32_t)(uintptr_t)(p))
 
 void mote_init(const mote_evt_entry_t *evt_table, uint16_t evt_count);
+
+/* 因队列满/事件无效而被丢弃的事件总数（用于可靠性监测） */
+uint32_t mote_dropped_count(void);
 
 /* 主循环单步：处理定时器/任务，分发一个事件；返回是否分发了事件 */
 bool mote_poll(void);
@@ -94,10 +97,11 @@ mote_status_t mote_timer_restart(mote_timer_t *t, uint32_t ms);
 
 typedef struct {
     mote_handler_t handler;
+    void *ctx;        /* 原样传给 handler 的第三个参数 */
     uint32_t period_ms;
 } mote_task_desc_t;
 
-#define MOTE_TASK_DEF(period_ms, handler) { (handler), (period_ms) }
+#define MOTE_TASK_DEF(period_ms, handler, ctx) { (handler), (ctx), (period_ms) }
 
 void mote_task_init(const mote_task_desc_t *table, uint16_t count);
 mote_status_t mote_task_start(uint16_t id);

@@ -321,8 +321,11 @@ static void key_scan(uint16_t evt, void *param, void *ctx)
 
 static const mote_task_desc_t tasks[] = {
     /* 任务名单（描述符表）：放 Flash，占的 RAM 可忽略 */
-    MOTE_TASK_DEF(10, key_scan),
-    /* MOTE_TASK_DEF(周期ms, handler) = "每 10ms 叫一次 key_scan" */
+    MOTE_TASK_DEF(10, key_scan, NULL),
+    /* MOTE_TASK_DEF(周期ms, handler, ctx)：
+     *   周期ms  = 多久叫一次
+     *   handler = 叫谁
+     *   ctx     = 交给他自带的"工作台"（原样传给 handler 第三个参数），不用就 NULL */
 };
 
 int main(void)
@@ -403,7 +406,7 @@ static const mote_evt_entry_t table[] = {
 };
 
 static const mote_task_desc_t tasks[] = {
-    MOTE_TASK_DEF(20, breath_step),
+    MOTE_TASK_DEF(20, breath_step, NULL),
 };
 
 int main(void)
@@ -496,6 +499,7 @@ ID 就是值班表的下标，表按"最大 ID+1"占 Flash。ID 写成 200 号�
 | LED 完全不闪 | tick 没接上 | `SysTick_Config` 调了没？`mote_port.c` 加工程没？ |
 | 事件递了没反应 | 值班表没登记 / ID 超界 | `[EVT_X] = MOTE_ENTRY(...)` 写了没？表大小传对没？ |
 | 偶尔丢数据 | 队列/柜子小了 | `MOTE_EVT_QUEUE_SIZE`、邮箱槽数调大，注意返回值 |
+| 想监控丢了多少事件 | — | 读 `mote_dropped_count()`：因队列满/事件无效被丢弃的累计数 |
 | 中断里改全局变量偶发抽风 | 中断和 handler 抢数据 | 数据只走纸条/柜子传，共享变量加临界区 |
 | 省不了电 | `mote_idle` 没生效 | 见移植教程 FAQ Q6 |
 | 系统周期性卡一下 | 某个 handler 太慢 | 用 `mote_ticks()` 在 handler 头尾打点计时 |
@@ -532,7 +536,9 @@ handler 里用 `evt` 参数区分是哪个纸条。
 定时器+事件 = 触发式、灵活（暂停/改周期/多种事件混流）。
 
 **Q7：MOTE_DELAYED_MAX 用完了还能递延时纸条吗？**
-返回 `MOTE_ERR_FULL`。要么调大配置，要么改用定时器（定时器无数量上限）。
+返回 `MOTE_ERR_FULL`。要么调大配置，要么改用定时器。
+注意定时器是链表结构，每次 `mote_poll` 会线性扫描全部定时器，
+几十个以内没问题，不建议堆上百个（需要更多就用软件时间轮或换 RTOS）。
 
 **Q8：中断里想干点复杂的活？**
 正确姿势：中断只递纸条，把活写在 handler 里。这就是 MoteOS 的全部哲学。

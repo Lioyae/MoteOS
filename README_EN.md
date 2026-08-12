@@ -61,12 +61,13 @@ Baseline: CH32V003 (16KB Flash / 2KB RAM, all modules enabled).
 
 | Module | Description |
 |---|---|
-| Event queue | `mote_event_post` / `mote_event_post_replace` (latest wins per ID) / `mote_event_post_delayed` |
+| Event queue | `mote_event_post` / `mote_event_post_replace` (latest wins per ID) / `mote_event_post_delayed`; drop counter `mote_dropped_count()` |
 | Dispatch table | C99 designated initializers; event ID is the index; O(1) dispatch; table lives in Flash |
-| Timers | Statically defined, unlimited count; 32-bit wraparound safe; auto-post events on expiry |
-| Task layer | Descriptors in Flash, state slot pool in RAM; inactive tasks consume no RAM (optional) |
-| Mailbox | Static slots with deep copy; fill from ISR, drain from handler (optional) |
+| Timers | Statically defined; 32-bit wraparound safe; auto-post events on expiry; one-shot timers retry instead of vanishing when the queue is full |
+| Task layer | Descriptors in Flash (handler + ctx + period), state slot pool in RAM; inactive tasks consume no RAM (optional) |
+| Mailbox | Static slots with deep copy; fill from ISR, drain from handler; rolls back if event post fails (optional) |
 | Low power | Enters `mote_idle()` (wfi by default) when idle; woken by the tick interrupt |
+| Critical section | Save/restore style (PRIMASK / INTSYSCR), nesting-safe |
 
 ## Quick Start
 
