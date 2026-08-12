@@ -243,10 +243,34 @@ mote_timer_restart(&t, 2000);      /* 把时间改成 2 秒后响。前提：它
 1. **变量必须 static**（或全局）：闹钟要持续存在直到响（原因见 1.2）
 2. **handler 里可以随意开/关闹钟**——这是把"长流程拆成多步"的官方姿势（见 7.1）
 3. **中断里不能碰定时器**——定时器 API 只能在主循环上下文用（铁律 3）
-4. **单次闹钟是"至少一次送达"**：队列满时它会推迟到队列有空位才响。
-   对 LED 闪烁无所谓；但**超时检测不能靠它**——超时事件必须在截止时刻出现。
-   需要严格超时：在 handler 里核对 `mote_ticks()` 实际过了多久。
-5. **周期闹钟在队列满时会丢当次**（计入 `mote_dropped_count()`），下一周期照常
+
+### 3.5 队列满时的三种策略（重要）
+
+队列满了，定时器到期的事件怎么办？用 `mote_timer_start_ex` 指定策略：
+
+```c
+/* 策略一 DROP（严格截止）：到期即投，失败即弃并释放定时器。
+ * 适合超时检测——事件要么准时出现，要么永不出现 */
+mote_timer_start_ex(&t, EVT_TMO, NULL, 100, false, MOTE_TIMER_POLICY_DROP);
+
+/* 策略二 RETRY（默认）：单次定时器满队重试，事件"至少一次"送达但可能迟到。
+ * 适合 LED 闪烁这类迟到无所谓的场景 */
+mote_timer_start_ex(&t, EVT_LED, NULL, 500, false, MOTE_TIMER_POLICY_RETRY);
+
+/* 策略三 LATEST：replace 语义，队列里同 ID 只留最新一份。
+ * 适合状态类事件（ADC 值、位置更新），天然防堆积 */
+mote_timer_start_ex(&t, EVT_ADC, NULL, 20, true, MOTE_TIMER_POLICY_LATEST);
+```
+
+**选型速查**：
+
+| 场景 | 策略 |
+|---|---|
+| 超时检测、协议截止时间 | DROP（严格截止） |
+| 迟到无所谓（闪烁、心跳） | RETRY（默认） |
+| 状态类、只关心最新值 | LATEST |
+
+默认的 `mote_timer_start` = RETRY（单次）/ DROP（周期，满队丢当次并计入 `mote_dropped_count()`）。
 
 ---
 

@@ -52,7 +52,16 @@ typedef struct mote_timer {
     uint32_t period;  /* 0 = 单次，非 0 = 周期（ms） */
     uint16_t evt;
     void *param;
+    uint8_t policy;   /* 满队行为策略，见 mote_timer_policy_t */
 } mote_timer_t;
+
+/* 定时器到期投递遇队列满时的策略 */
+typedef enum {
+    MOTE_TIMER_POLICY_RETRY = 0,  /* 单次：重试至送达（至少一次，默认）；
+                                   * 周期：等同 DROP */
+    MOTE_TIMER_POLICY_DROP,       /* 到期即投，失败即弃并释放定时器（严格截止） */
+    MOTE_TIMER_POLICY_LATEST,     /* replace 语义投递：队列里同 ID 只留最新一份 */
+} mote_timer_policy_t;
 
 /* 任务层周期触发时传给 handler 的事件值 */
 #define MOTE_EVT_TASK 0xFFFFu
@@ -68,7 +77,9 @@ void mote_init(const mote_evt_entry_t *evt_table, uint16_t evt_count);
 uint32_t mote_dropped_count(void);
 
 /* 丢事件钩子：每丢弃一次事件回调一次。
- * 注意：钩子在关中断上下文中被调用，必须极短且不能调用内核 API */
+ * 注意：① 在关中断上下文中被调用，必须极短；
+ *      ② 钩子内调用内核 API 是允许的（有防重入保护），
+ *         但再次触发的丢弃不会递归回调本钩子 */
 typedef void (*mote_drop_hook_t)(uint16_t evt);
 void mote_set_drop_hook(mote_drop_hook_t hook);
 
@@ -93,12 +104,15 @@ void mote_tick_set(uint32_t ticks);
 
 uint32_t mote_ticks(void);
 
-/* 启动定时器。
- * 周期定时器：队列满时当次到期事件丢弃（计入 mote_dropped_count）。
- * 单次定时器：至少一次送达语义——队列满时保留重试，事件延迟送达但绝不蒸发；
- * 需要严格截止时间（如超时检测）时，请在 handler 内核对 mote_ticks()。 */
+/* 启动定时器（默认策略：单次=RETRY 至少一次送达，周期=DROP 满队丢当次）。
+ * 需要严格截止时间（超时检测）用 mote_timer_start_ex + MOTE_TIMER_POLICY_DROP，
+ * 或保持默认并在 handler 内核对 mote_ticks()。 */
 mote_status_t mote_timer_start(mote_timer_t *t, uint16_t evt, void *param,
                                uint32_t ms, bool periodic);
+/* 指定满队策略的启动（策略含义见 mote_timer_policy_t） */
+mote_status_t mote_timer_start_ex(mote_timer_t *t, uint16_t evt, void *param,
+                                  uint32_t ms, bool periodic,
+                                  mote_timer_policy_t policy);
 mote_status_t mote_timer_stop(mote_timer_t *t);
 mote_status_t mote_timer_restart(mote_timer_t *t, uint32_t ms);
 

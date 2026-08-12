@@ -176,6 +176,49 @@ static void test_one_shot_survives_full_queue(void)
     TEST_ASSERT(mote_poll() == false); /* 单次定时器已释放 */
 }
 
+static void test_drop_policy_strict_deadline(void)
+{
+    static mote_timer_t t;
+
+    mote_init(table, 2);
+    for (int i = 0; i < MOTE_EVT_QUEUE_SIZE; i++) {
+        TEST_ASSERT(mote_event_post(1, MOTE_P(i)) == MOTE_OK);
+    }
+    TEST_ASSERT(mote_timer_start_ex(&t, 0, MOTE_P(7), 5, false,
+                                    MOTE_TIMER_POLICY_DROP) == MOTE_OK);
+    for (int i = 0; i < 5; i++) {
+        mote_tick();
+    }
+    TEST_ASSERT(mote_poll() == true); /* 到期：投递失败被计数，定时器释放 */
+    for (int i = 0; i < MOTE_EVT_QUEUE_SIZE - 1; i++) {
+        TEST_ASSERT(mote_poll() == true);
+    }
+    /* DROP 策略：事件不迟到 */
+    TEST_ASSERT(mote_poll() == false);
+    TEST_ASSERT(s_last_param != 7);
+    /* 定时器已释放 */
+    TEST_ASSERT(mote_timer_restart(&t, 10) == MOTE_ERR_NOT_FOUND);
+}
+
+static void test_latest_coalesces(void)
+{
+    static mote_timer_t t;
+
+    mote_init(table, 2);
+    s_calls = 0;
+    TEST_ASSERT(mote_timer_start_ex(&t, 0, MOTE_P(42), 5, true,
+                                    MOTE_TIMER_POLICY_LATEST) == MOTE_OK);
+    /* 预塞同 ID 事件，模拟"上一拍还没被 handler 处理" */
+    TEST_ASSERT(mote_event_post(0, MOTE_P(1)) == MOTE_OK);
+    for (int i = 0; i < 5; i++) {
+        mote_tick();
+    }
+    TEST_ASSERT(mote_poll() == true);  /* 到期 replace：队列仍 1 条 → 派发 */
+    TEST_ASSERT(s_last_param == 42);   /* 派发的是最新参数 */
+    TEST_ASSERT(mote_poll() == false); /* 无第二条积压 */
+    mote_timer_stop(&t);
+}
+
 void suite_timer(void)
 {
     test_timer_one_shot();
@@ -185,4 +228,6 @@ void suite_timer(void)
     test_tick_overflow();
     test_post_delayed();
     test_one_shot_survives_full_queue();
+    test_drop_policy_strict_deadline();
+    test_latest_coalesces();
 }

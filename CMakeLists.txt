@@ -18,6 +18,7 @@ add_executable(test_moteos
     tests/test_timer.c
     tests/test_task.c
     tests/test_mail.c
+    tests/test_interleave.c
 )
 
 target_include_directories(test_moteos PRIVATE
@@ -26,7 +27,7 @@ target_include_directories(test_moteos PRIVATE
     tests
 )
 
-target_compile_options(test_moteos PRIVATE -Wall -Wextra)
+target_compile_options(test_moteos PRIVATE -Wall -Wextra -Werror)
 
 add_test(NAME moteos_unit COMMAND test_moteos)
 

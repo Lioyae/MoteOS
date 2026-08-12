@@ -1,5 +1,24 @@
 # 更新日志
 
+## v0.3.0 - 2026-08-13
+
+### 新增
+
+- 定时器满队策略：`mote_timer_start_ex` + `MOTE_TIMER_POLICY_RETRY / DROP / LATEST`
+  （至少一次送达 / 严格截止 / replace 语义只留最新）
+- 交错测试骨架：随机交错主循环与伪中断操作，验证并发一致性（投递账目、邮箱无滞留、临界区不泄漏）
+- CI：真实 WCH SDK（openwch/ch32v003）编译 CH32V003 例程；体积断言收紧为 text <2.5KB / RAM <512B（-Os 实测）
+- drop hook 防重入保护
+
+### 修复
+
+- `mote_event_post_delayed` 在 `MOTE_DELAYED_MAX==0` 时漏记丢弃（口径统一）
+
+### 文档
+
+- 使用教程：定时器三种策略与选型速查表
+- README：资源占用改为实测数据（内核 RV32EC 2.0KB / M0+ 1.2KB / RAM 280B；完整点灯工程 2.7KB/712B）
+
 ## v0.2.0 - 2026-08-13
 
 ### 破坏性变更

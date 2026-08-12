@@ -26,6 +26,7 @@ static mote_timer_t *s_timers;
 
 static uint32_t s_dropped;
 static mote_drop_hook_t s_drop_hook;
+static uint8_t s_in_drop_hook;
 
 #if MOTE_DELAYED_MAX > 0
 static struct {
@@ -92,8 +93,11 @@ void mote_set_drop_hook(mote_drop_hook_t hook)
 void mote_note_dropped(uint16_t evt)
 {
     s_dropped++;
-    if (s_drop_hook != NULL) {
+    /* 防重入：钩子内再触发丢弃只计数、不再递归回调 */
+    if (s_drop_hook != NULL && !s_in_drop_hook) {
+        s_in_drop_hook = 1;
         s_drop_hook(evt);
+        s_in_drop_hook = 0;
     }
 }
 
@@ -194,6 +198,14 @@ static bool mote_timer_linked(mote_timer_t *t)
 mote_status_t mote_timer_start(mote_timer_t *t, uint16_t evt, void *param,
                                uint32_t ms, bool periodic)
 {
+    return mote_timer_start_ex(t, evt, param, ms, periodic,
+                               MOTE_TIMER_POLICY_RETRY);
+}
+
+mote_status_t mote_timer_start_ex(mote_timer_t *t, uint16_t evt, void *param,
+                                  uint32_t ms, bool periodic,
+                                  mote_timer_policy_t policy)
+{
     if (t == NULL || ms == 0) {
         return MOTE_ERR_PARAM;
     }
@@ -202,6 +214,7 @@ mote_status_t mote_timer_start(mote_timer_t *t, uint16_t evt, void *param,
     t->period = periodic ? ms : 0;
     t->evt = evt;
     t->param = param;
+    t->policy = (uint8_t)policy;
     t->next = s_timers;
     s_timers = t;
     return MOTE_OK;
@@ -259,6 +272,7 @@ mote_status_t mote_event_post_delayed(uint16_t evt, void *param, uint32_t ms)
     (void)evt;
     (void)param;
     (void)ms;
+    mote_note_dropped(evt); /* 口径统一：功能关闭时视为拒绝 */
     return MOTE_ERR_FULL;
 #endif
 }
@@ -274,12 +288,33 @@ static void mote_process_timers(void)
         if ((int32_t)(s_tick - t->due) >= 0) {
             if (t->period != 0) {
                 t->due = s_tick + t->period;
-                mote_event_post(t->evt, t->param); /* 失败计丢失数 */
-            } else if (mote_event_post(t->evt, t->param) == MOTE_OK) {
-                mote_timer_unlink(t); /* 单次：送达才释放，满队自动重试 */
+                if (t->policy == MOTE_TIMER_POLICY_LATEST) {
+                    mote_event_post_replace(t->evt, t->param);
+                } else {
+                    /* 周期：RETRY/DROP 都等同丢当次（下一拍照常） */
+                    mote_event_post(t->evt, t->param);
+                }
+            } else {
+                switch (t->policy) {
+                case MOTE_TIMER_POLICY_DROP:
+                    /* 严格截止：失败即弃并释放 */
+                    mote_event_post(t->evt, t->param);
+                    mote_timer_unlink(t);
+                    break;
+                case MOTE_TIMER_POLICY_LATEST:
+                    /* replace 失败说明满队且无同 ID：截止已过，释放 */
+                    mote_event_post_replace(t->evt, t->param);
+                    mote_timer_unlink(t);
+                    break;
+                case MOTE_TIMER_POLICY_RETRY:
+                default:
+                    /* 至少一次：送达才释放，满队保留重试 */
+                    if (mote_event_post(t->evt, t->param) == MOTE_OK) {
+                        mote_timer_unlink(t);
+                    }
+                    break;
+                }
             }
-            /* 单次定时器在队列满时保留在链表（due 已过期），
-             * 每次 poll 重试直到事件入队 */
         }
         t = next;
     }

@@ -49,13 +49,11 @@ MoteOS is a C99 event-driven cooperative kernel for small MCUs (2KB RAM / 16KB F
 
 ## Resource Usage
 
-Baseline: CH32V003 (16KB Flash / 2KB RAM, all modules enabled).
-
-| Item | Usage |
+| Item | Usage (measured, -Os) |
 |---|---|
-| Kernel Flash | ~2KB |
-| Kernel RAM | ~300B (event queue 16 slots + delayed slots 4 + task slots 4) |
-| Left for the application | ~14KB Flash / 1.7KB RAM |
+| Kernel Flash | RV32EC ~2.0KB (2004B), Cortex-M0+ ~1.2KB (1236B); CI asserts <2.5KB |
+| Kernel RAM | ~280B (event queue 16 slots + delayed 4 + task slots 4); CI asserts <512B |
+| Full blink example | Measured on CH32V003: FLASH 2.7KB / RAM 712B (including startup and stack) |
 
 ## Modules
 
@@ -63,7 +61,7 @@ Baseline: CH32V003 (16KB Flash / 2KB RAM, all modules enabled).
 |---|---|
 | Event queue | `mote_event_post` / `mote_event_post_replace` (latest wins per ID) / `mote_event_post_delayed`; drop counter `mote_dropped_count()` |
 | Dispatch table | C99 designated initializers; event ID is the index; O(1) dispatch; table lives in Flash |
-| Timers | Statically defined; 32-bit wraparound safe; auto-post events on expiry; one-shot timers are "at-least-once" (retry when the queue is full); periodic timers drop and count the missed beat |
+| Timers | Statically defined; 32-bit wraparound safe; selectable full-queue policy: retry (default, at-least-once) / drop (strict deadline) / latest (replace semantics) |
 | Task layer | Periodic-callback convenience layer: descriptors in Flash (handler + ctx + period), state slot pool in RAM; inactive tasks consume no RAM (optional) |
 | Mailbox | Static slots with deep copy; slot insert and event enqueue are atomic within one critical section (all-or-nothing, no race window) (optional) |
 | Low power | Enters `mote_idle()` (wfi by default) when idle; woken by the tick interrupt |

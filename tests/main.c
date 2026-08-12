@@ -13,6 +13,7 @@ extern void suite_queue(void);
 extern void suite_timer(void);
 extern void suite_task(void);
 extern void suite_mail(void);
+extern void suite_interleave(void);
 
 int main(void)
 {
@@ -20,6 +21,7 @@ int main(void)
     suite_timer();
     suite_task();
     suite_mail();
+    suite_interleave();
 
     printf("%d asserts, %d failures\n", g_asserts, g_fails);
     if (g_fails) {

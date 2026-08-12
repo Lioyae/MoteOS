@@ -176,6 +176,32 @@ static void test_drop_hook(void)
     TEST_ASSERT(s_hook_calls == 2);
 }
 
+static uint16_t s_evil_evt;
+static uint32_t s_evil_calls;
+
+static void evil_hook(uint16_t evt)
+{
+    s_evil_evt = evt;
+    s_evil_calls++;
+    mote_event_post(0, MOTE_P(evt)); /* 钩子内再投递：再次满队触发丢弃 */
+}
+
+static void test_hook_reentrancy(void)
+{
+    mote_init(table, 2);
+    s_evil_calls = 0;
+    for (int i = 0; i < MOTE_EVT_QUEUE_SIZE; i++) {
+        TEST_ASSERT(mote_event_post(0, MOTE_P(i)) == MOTE_OK);
+    }
+    mote_set_drop_hook(evil_hook);
+    TEST_ASSERT(mote_event_post(0, MOTE_P(9)) == MOTE_ERR_FULL);
+    /* 防重入：钩子只被调用一次（其内部的丢弃不递归回调） */
+    TEST_ASSERT(s_evil_calls == 1);
+    TEST_ASSERT(s_evil_evt == 0);
+    TEST_ASSERT(mote_dropped_count() == 2); /* 外层 1 + 钩子内 1 */
+    mote_set_drop_hook(NULL);
+}
+
 void suite_queue(void)
 {
     test_post_and_dispatch();
@@ -186,5 +212,6 @@ void suite_queue(void)
     test_null_handler_dropped();
     test_dropped_count();
     test_drop_hook();
+    test_hook_reentrancy();
     test_crit_nesting();
 }

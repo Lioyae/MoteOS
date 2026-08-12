@@ -50,17 +50,17 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-arm-none-eabi gcc-riscv64-unknown-elf
 
-      - name: Compile Cortex-M0+ (thumb)
+      - name: Compile Cortex-M0+ (thumb, -Os, size check)
         run: |
-          arm-none-eabi-gcc -std=c99 -Wall -Wextra -Werror -mcpu=cortex-m0plus -mthumb \
+          arm-none-eabi-gcc -std=c99 -Wall -Wextra -Werror -Os -mcpu=cortex-m0plus -mthumb \
             -c moteos/mote.c moteos/mote_task.c moteos/mote_mail.c moteos/port/mote_port.c \
             -Imoteos -Imoteos/port/cm0plus -Itests/stubs
           arm-none-eabi-size -t mote.o mote_task.o mote_mail.o
           TEXT=$(arm-none-eabi-size -t mote.o mote_task.o mote_mail.o | tail -1 | awk '{print $1}')
           RAM=$(arm-none-eabi-size -t mote.o mote_task.o mote_mail.o | tail -1 | awk '{print $2+$3}')
           echo "m0plus kernel: text=${TEXT}B ram=${RAM}B"
-          test "$TEXT" -lt 6144 || { echo "kernel text too large"; exit 1; }
-          test "$RAM" -lt 1024 || { echo "kernel ram too large"; exit 1; }
+          test "$TEXT" -lt 2560 || { echo "kernel text too large"; exit 1; }
+          test "$RAM" -lt 512 || { echo "kernel ram too large"; exit 1; }
           rm -f *.o
 
       - name: Compile Cortex-M3 (thumb)
@@ -70,14 +70,26 @@ jobs:
             -Imoteos -Imoteos/port/cm3 -Itests/stubs
           rm -f *.o
 
-      - name: Compile RISC-V RV32 (WCH QingKe)
+      - name: Compile RISC-V RV32 (WCH QingKe, -Os, size check)
         run: |
-          riscv64-unknown-elf-gcc -std=c99 -Wall -Wextra -Werror -march=rv32imc -mabi=ilp32 \
+          riscv64-unknown-elf-gcc -std=c99 -Wall -Wextra -Werror -Os -march=rv32imc -mabi=ilp32 \
             -c moteos/mote.c moteos/mote_task.c moteos/mote_mail.c moteos/port/mote_port.c \
             -Imoteos -Imoteos/port/ch32v -Itests/stubs
           riscv64-unknown-elf-size -t mote.o mote_task.o mote_mail.o
           TEXT=$(riscv64-unknown-elf-size -t mote.o mote_task.o mote_mail.o | tail -1 | awk '{print $1}')
           RAM=$(riscv64-unknown-elf-size -t mote.o mote_task.o mote_mail.o | tail -1 | awk '{print $2+$3}')
-          echo "rv32ec kernel: text=${TEXT}B ram=${RAM}B"
-          test "$TEXT" -lt 6144 || { echo "kernel text too large"; exit 1; }
-          test "$RAM" -lt 1024 || { echo "kernel ram too large"; exit 1; }
+          echo "rv32 kernel: text=${TEXT}B ram=${RAM}B"
+          test "$TEXT" -lt 2560 || { echo "kernel text too large"; exit 1; }
+          test "$RAM" -lt 512 || { echo "kernel ram too large"; exit 1; }
+          rm -f *.o
+
+      - name: Compile CH32V003 example against real WCH SDK
+        run: |
+          git clone --depth 1 https://github.com/openwch/ch32v003 /tmp/ch32v003
+          SDK=/tmp/ch32v003/EVT/EXAM/SRC
+          USER=/tmp/ch32v003/EVT/EXAM/ADC/ADC_DMA/User
+          riscv64-unknown-elf-gcc -std=c99 -Wall -Wextra -Werror -march=rv32imc -mabi=ilp32 \
+            -c moteos/mote.c moteos/mote_task.c moteos/mote_mail.c moteos/port/mote_port.c \
+            examples/ch32v003/main.c \
+            -Imoteos -Imoteos/port/ch32v \
+            -I"$SDK/Core" -I"$SDK/Peripheral/inc" -I"$SDK/Debug" -I"$USER"
