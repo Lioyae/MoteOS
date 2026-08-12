@@ -1,4 +1,10 @@
 /*
+ * MoteOS - event-driven cooperative kernel for small MCUs
+ * Copyright (c) 2026 Lioyae
+ * https://github.com/Lioyae/MoteOS
+ * SPDX-License-Identifier: Apache-2.0
+ */
+/*
  * MoteOS 例程：CH32V003（WCH SPL）
  *
  * 功能：LED 周期闪烁（定时器）、UART 回环（邮箱，中断接收→事件处理→回发）、

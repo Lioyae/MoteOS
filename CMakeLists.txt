@@ -1,3 +1,8 @@
+# MoteOS - event-driven cooperative kernel for small MCUs
+# Copyright (c) 2026 Lioyae
+# https://github.com/Lioyae/MoteOS
+# SPDX-License-Identifier: Apache-2.0
+
 cmake_minimum_required(VERSION 3.16)
 project(moteos C)
 

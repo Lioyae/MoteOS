@@ -10,17 +10,17 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Lioyae/MoteOS-/actions/workflows/build.yml">
-    <img src="https://img.shields.io/github/actions/workflow/status/Lioyae/MoteOS-/build.yml?style=for-the-badge" alt="Build Status">
+  <a href="https://github.com/Lioyae/MoteOS/actions/workflows/build.yml">
+    <img src="https://img.shields.io/github/actions/workflow/status/Lioyae/MoteOS/build.yml?style=for-the-badge" alt="Build Status">
   </a>
-  <a href="https://github.com/Lioyae/MoteOS-">
+  <a href="https://github.com/Lioyae/MoteOS">
     <img src="https://img.shields.io/badge/language-C99-2b6cb0?style=for-the-badge" alt="C99">
   </a>
-  <a href="https://github.com/Lioyae/MoteOS-/stargazers">
-    <img src="https://img.shields.io/github/stars/Lioyae/MoteOS-?style=for-the-badge&color=d69e2e" alt="Stars">
+  <a href="https://github.com/Lioyae/MoteOS/stargazers">
+    <img src="https://img.shields.io/github/stars/Lioyae/MoteOS?style=for-the-badge&color=d69e2e" alt="Stars">
   </a>
-  <a href="https://github.com/Lioyae/MoteOS-/blob/main/LICENSE">
-    <img src="https://img.shields.io/github/license/Lioyae/MoteOS-?style=for-the-badge&color=38a169" alt="License">
+  <a href="https://github.com/Lioyae/MoteOS/blob/main/LICENSE">
+    <img src="https://img.shields.io/github/license/Lioyae/MoteOS?style=for-the-badge&color=38a169" alt="License">
   </a>
 </p>
 

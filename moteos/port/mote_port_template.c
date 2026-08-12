@@ -1,4 +1,10 @@
 /*
+ * MoteOS - event-driven cooperative kernel for small MCUs
+ * Copyright (c) 2026 Lioyae
+ * https://github.com/Lioyae/MoteOS
+ * SPDX-License-Identifier: Apache-2.0
+ */
+/*
  * MoteOS 移植模板（非 CMSIS 内核/裸机工具链用）
  *
  * 移植只需三步，零汇编：
