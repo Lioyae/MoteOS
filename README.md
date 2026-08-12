@@ -1,6 +1,31 @@
-# MoteOS
+<p align="center">
+  <img src="brand/moteos-icon.svg" alt="MoteOS Logo" width="160">
+</p>
 
-面向小容量单片机（2KB RAM / 16KB Flash 级别）的 C99 事件驱动协作式内核。
+<h1 align="center">MoteOS</h1>
+
+<p align="center">
+  <strong>为小容量单片机而生的事件驱动协作式内核</strong><br>
+  零汇编 · 零动态内存分配 · 全部资源占用编译期确定
+</p>
+
+<p align="center">
+  <a href="https://github.com/Lioyae/MoteOS-/releases/latest">
+    <img src="https://img.shields.io/github/v/release/Lioyae/MoteOS-?style=flat-square&color=2b6cb0" alt="Release Version">
+  </a>
+  <a href="https://github.com/Lioyae/MoteOS-/stargazers">
+    <img src="https://img.shields.io/github/stars/Lioyae/MoteOS-?style=flat-square&color=d69e2e" alt="Stars">
+  </a>
+  <a href="https://github.com/Lioyae/MoteOS-/blob/main/LICENSE">
+    <img src="https://img.shields.io/github/license/Lioyae/MoteOS-?style=flat-square&color=38a169" alt="License">
+  </a>
+</p>
+
+---
+
+## 简介
+
+MoteOS 是面向小容量单片机（2KB RAM / 16KB Flash 级别）的 C99 事件驱动协作式内核。
 
 - 无汇编、无动态内存分配、无阻塞延时 API
 - 全部 RAM/Flash 用量在编译期确定，链接器可验证
@@ -111,4 +136,9 @@ moteos/
 examples/                    # 各芯片例程
 tests/                       # PC 单元测试
 docs/                        # 移植与使用教程
+brand/                       # 品牌资源
 ```
+
+## 开源协议
+
+本项目采用 [Apache License 2.0](LICENSE)。
