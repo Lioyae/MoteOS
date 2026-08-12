@@ -15,10 +15,15 @@
  *             + moteos/port/mote_port.c
  *   - 头文件路径：moteos/ 和 moteos/port/cm3/
  *   - 无需定义任何宏；SysTick 由 mote_port.c 接管
+ *   - MoteOS 内核不依赖 CMSIS，无包含顺序要求；本例程外设代码
+ *     使用 CMSIS 器件头（stm32f1xx.h）
+ *     旧版标准库（SPL）用户把 stm32f1xx.h 换回 stm32f10x.h 即可
  */
 
+/* 器件选择宏：STM32F103xB = F103C8/CB（Blue Pill），按你的型号改 */
+#define STM32F103xB
+#include "stm32f1xx.h"
 #include "mote.h"
-#include "stm32f10x.h"
 
 /* ---- 事件 ID（连续枚举，从 0 起） ---- */
 enum {
@@ -41,7 +46,7 @@ static const mote_task_desc_t tasks[] = {
 static void led_handler(uint16_t evt, void *param, void *ctx)
 {
     (void)evt; (void)param; (void)ctx;
-    GPIOC->ODR ^= GPIO_Pin_13;  /* 翻转 PC13 */
+    GPIOC->ODR ^= (1u << 13);  /* 翻转 PC13 */
 }
 
 static void uart_handler(uint16_t evt, void *param, void *ctx)
@@ -62,7 +67,7 @@ static void uart_handler(uint16_t evt, void *param, void *ctx)
 static void heartbeat(uint16_t evt, void *param, void *ctx)
 {
     (void)evt; (void)param; (void)ctx;
-    GPIOC->ODR ^= GPIO_Pin_14;  /* 翻转 PC14 */
+    GPIOC->ODR ^= (1u << 14);  /* 翻转 PC14 */
 }
 
 static const mote_evt_entry_t evt_table[] = {

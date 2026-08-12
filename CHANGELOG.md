@@ -1,5 +1,18 @@
 # 更新日志
 
+## v1.0.1 - 2026-08-13
+
+### 修复
+
+- Cortex-M 移植层（cm0plus/cm3）不再依赖 CMSIS 头文件：临界区改为裸内联汇编
+  （`MRS PRIMASK` / `CPSID i` / `MSR`，兼容 GCC / ArmClang / armcc）。
+  修复内核在真实工程中因 `core_cm3.h` 依赖器件头定义 `IRQn_Type`
+  而无法独立编译的问题，包含顺序不再有任何要求
+- STM32F103 例程改用 CMSIS 器件头 `stm32f1xx.h`（补器件选择宏），
+  引脚宏改为位字面量，兼容 SPL 与 Cube 两套头文件
+- CI：STM32F103 例程真实头文件编译改为双仓库钉版本
+  （CMSIS_5 的 `CMSIS/Core/Include` + STMicroelectronics/cmsis-device-f1）
+
 ## v1.0.0 - 2026-08-13
 
 首个生产就绪版本。此前版本为 0.x 开发预览。

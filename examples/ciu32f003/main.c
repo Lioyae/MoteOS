@@ -20,8 +20,10 @@
  *   - 无需定义任何宏；SysTick 由 mote_port.c 接管（startup 里是弱符号）
  */
 
-#include "mote.h"
+/* MoteOS 内核不依赖 CMSIS，无包含顺序要求；
+ * 本例程外设代码使用华大电子 CIU32F003_STDLib */
 #include "ciu32f003_std.h"
+#include "mote.h"
 
 /* ---- 事件 ID（连续枚举，从 0 起） ---- */
 enum {

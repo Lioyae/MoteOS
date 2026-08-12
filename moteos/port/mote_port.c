@@ -24,7 +24,11 @@ void SysTick_Handler(void)
 
 void mote_idle(void)
 {
-    __WFI();
+#if defined(__CC_ARM)
+    __asm { wfi }
+#else
+    __asm volatile ("wfi" ::: "memory");
+#endif
 }
 
 #endif

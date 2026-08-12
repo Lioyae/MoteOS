@@ -94,18 +94,22 @@ jobs:
           test "$RAM" -lt 512 || { echo "kernel ram too large"; exit 1; }
           rm -f *.o
 
-      - name: Compile STM32F103 example against real CMSIS headers
+      - name: Compile STM32F103 example against real CMSIS/ST headers
         run: |
           git init /tmp/cmsis5
           git -C /tmp/cmsis5 remote add origin https://github.com/ARM-software/CMSIS_5
           git -C /tmp/cmsis5 fetch --depth 1 origin 55b19837f5703e418ca37894d5745b1dc05e4c91
           git -C /tmp/cmsis5 checkout --detach FETCH_HEAD
+          git init /tmp/cmsis-f1
+          git -C /tmp/cmsis-f1 remote add origin https://github.com/STMicroelectronics/cmsis-device-f1
+          git -C /tmp/cmsis-f1 fetch --depth 1 origin c8e9a4a4f16b6d2cb2a2083cbe5161025280fb22
+          git -C /tmp/cmsis-f1 checkout --detach FETCH_HEAD
           arm-none-eabi-gcc -std=c99 -Wall -Wextra -Werror -mcpu=cortex-m3 -mthumb \
             -c moteos/mote.c moteos/mote_task.c moteos/mote_mail.c moteos/port/mote_port.c \
             examples/stm32f103/main.c \
             -Imoteos -Imoteos/port/cm3 \
-            -I/tmp/cmsis5/Device/ST/STM32F1xx/Include \
-            -I/tmp/cmsis5/Core/Include
+            -I/tmp/cmsis5/CMSIS/Core/Include \
+            -I/tmp/cmsis-f1/Include
 
       - name: Compile CH32V003 example against real WCH SDK
         run: |

@@ -301,7 +301,7 @@ static inline uint32_t mote_crit_active(void)
 
 | 内核 | 状态来源 | 实现 |
 |---|---|---|
-| Cortex-M0+/M3 | PRIMASK | `__get_PRIMASK()` / `__set_PRIMASK()`（见 `port/cm0plus`、`port/cm3`） |
+| Cortex-M0+/M3 | PRIMASK | 裸汇编 `MRS/CPSID/MSR`，**不依赖 CMSIS**（见 `port/cm0plus`、`port/cm3`，同时兼容 GCC/AC6/AC5） |
 | WCH RISC-V | INTSYSCR（CSR 0x800） | `csrr/csrw 0x800`（见 `port/ch32v`） |
 | AVR 等 | 状态寄存器 SREG | `in`/`out` 指令保存恢复 SREG |
 
