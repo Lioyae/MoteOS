@@ -91,7 +91,7 @@ jobs:
           git clone --depth 1 https://github.com/openwch/ch32v003 /tmp/ch32v003
           SDK=/tmp/ch32v003/EVT/EXAM/SRC
           USER=/tmp/ch32v003/EVT/EXAM/ADC/ADC_DMA/User
-          riscv-none-elf-gcc -std=c99 -Wall -Wextra -Werror -march=rv32imc_zicsr -mabi=ilp32 \
+          riscv-none-elf-gcc -std=c99 -Wall -Wextra -Werror -march=rv32imc_zicsr_zifencei -mabi=ilp32 \
             -c moteos/mote.c moteos/mote_task.c moteos/mote_mail.c moteos/port/mote_port.c \
             examples/ch32v003/main.c \
             -Imoteos -Imoteos/port/ch32v \
