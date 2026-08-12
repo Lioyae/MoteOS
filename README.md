@@ -1,3 +1,7 @@
+<p align="right">
+  简体中文 | <a href="README_EN.md">English</a>
+</p>
+
 <p align="center">
   <img src="brand/moteos-icon.svg" alt="MoteOS Logo" width="160">
 </p>
