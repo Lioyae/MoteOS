@@ -10,9 +10,6 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Lioyae/MoteOS-/releases/latest">
-    <img src="https://img.shields.io/github/v/release/Lioyae/MoteOS-?style=flat-square&color=2b6cb0" alt="Release Version">
-  </a>
   <a href="https://github.com/Lioyae/MoteOS-/stargazers">
     <img src="https://img.shields.io/github/stars/Lioyae/MoteOS-?style=flat-square&color=d69e2e" alt="Stars">
   </a>
