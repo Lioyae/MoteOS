@@ -36,7 +36,7 @@
 | `suite_queue` | post/派发、满队报错、replace 覆盖、越界 ID 安全丢弃、空 handler、丢弃计数、drop hook（含重入）、临界区嵌套 |
 | `suite_timer` | 单次/周期、handler 内自停、restart、tick 回绕、延时投递（含 replace/cancel）、满队三策略（RETRY/DROP/LATEST）、**相位稳定无漂移**、**ms 边界运行时校验**、**policy 越界运行时校验**、**排序链表触发顺序/重排**、**`mote_next_due` deadline 计算**、**`mote_sleep` 睡眠判定（宿主机 idle 观测）** |
 | `suite_task` | 周期触发、停止、槽池（随配置伸缩）、ctx 透传、**相位无漂移**、**period_ms 边界校验** |
-| `suite_mail` | 收发往返、满箱、空箱、超长拒绝、**满队整体失败不滞留**（先入队后入箱，全有或全无）、**钩子重入同一邮箱**、**非法构造（slots==0/空指针/item_size 越界）运行时拒绝** |
+| `suite_mail` | 收发往返、满箱、空箱、超长拒绝、**满队整体失败不滞留**（先入队后入箱，全有或全无）、**钩子重入同一邮箱**、**非法构造（slots==0/空指针/item_size 越界）运行时拒绝**、**槽长度域写坏（0 / >item_size）运行时拒绝** |
 | `suite_interleave` | 见下节 |
 
 ### 2. 交错测试（`tests/test_interleave.c`）
@@ -73,9 +73,10 @@
 
 ### 3. 断言开启构建（`test_moteos_assert`）
 
-`mote_config.h` 里 `MOTE_ASSERT` 默认为 `((void)0)`——断言路径**从不参与编译**。
-该目标强制 `-include tests/mote_assert.h`（在 `mote_config.h` 之前生效），
-把 `MOTE_ASSERT` 替换为"打印位置 + abort"：
+`mote_config.h` 里 `MOTE_ASSERT` 默认开启——回调弱符号 `mote_assert_fail`
+（`mote_port.c` 的宿主机实现为 abort，芯片实现为停机死循环）。该目标用
+`-include tests/mote_assert.h` 强制在 `mote_config.h` **之前**生效，
+把 `MOTE_ASSERT` 替换为"打印文件行号 + abort"版本，让失败现场一眼可读：
 
 - 内核所有断言路径被真实编译进测试二进制并运行
 - 测试全程触发任何断言 → 立即失败（CTest 报红）
@@ -154,9 +155,9 @@ cppcheck --enable=warning,performance,portability --std=c99 \
 
 | 构建 | 断言数 | 失败 | 结果 |
 |---|---|---|---|
-| `test_moteos`（默认配置） | 4841 | 0 | ALL PASSED |
-| `test_moteos_assert`（断言开启） | 4841 | 0 | ALL PASSED（全程未触发任何内核断言） |
-| `test_moteos_max`（队列 255 等最坏配置） | 8450 | 0 | ALL PASSED |
+| `test_moteos`（默认配置） | 4843 | 0 | ALL PASSED |
+| `test_moteos_assert`（断言开启） | 4843 | 0 | ALL PASSED（全程未触发任何内核断言） |
+| `test_moteos_max`（队列 255 等最坏配置） | 8452 | 0 | ALL PASSED |
 
 ### 2.2 交错测试多种子
 
@@ -176,20 +177,20 @@ cppcheck --enable=warning,performance,portability --std=c99 \
 ```
 moteos/mote.c               308 行  288 覆盖   93%   （未覆盖：MOTE_DELAYED_MAX=0 分支、
                                                         tick 回绕保护路径等）
-moteos/mote_mail.c           62 行   59 覆盖   95%   （未覆盖：参数校验分支）
+moteos/mote_mail.c           67 行   64 覆盖   95%   （未覆盖：非对齐拷贝头/结构写坏分支）
 moteos/mote_task.c           41 行   39 覆盖   95%
 moteos/port/host/mote_port.h  9 行    9 覆盖  100%
 moteos/port/mote_port.c       6 行    4 覆盖   66%   ← 仅宿主分支参与 gcovr；目标机分支
                                                       （SysTick/tickless/wfi）由交叉编译
                                                       + QEMU 冒烟覆盖（tickless 档实际
                                                       执行 tickless 空闲路径）
-TOTAL                       426 行  399 覆盖   93.7%
+TOTAL                       431 行  404 覆盖   93.7%
 ```
 
 ```
-lines:     93.7% (399/426)   ← CI 门槛 85%
+lines:     93.7% (404/431)   ← CI 门槛 85%
 functions: 95.6% (43/45)
-branches:  83.8% (218/260)
+branches:  84.2% (224/266)
 ```
 
 > gcovr 8.x 对多目标合并更严格（断言构建的 -include 会平移行号），
@@ -235,7 +236,9 @@ handler 派发链路完整。tickless 档另验证（时间膨胀，1 tick-ms = 
 > 体积断言为**分账口径**：内核三件套（mote.o/mote_task.o/mote_mail.o）
 > 与移植层 mote_port.o（SysTick/临界区/idle）分别设限，移植层不再游离
 > 在断言之外。M0+ 数字为本机实测（评审整改后三件套 2297 B，含 RETRY
-> raw 入队等新增路径）。队列 255 配置的 RAM 2.3KB 是用户把队列开到
+> raw 入队等新增路径；**体积随工具链版本小幅浮动——gcc 14.3.1 实测
+> 2343 B，仍在 CI 阈值 <2560 内，以你的 map 文件与 CI 断言为准**）。
+> 队列 255 配置的 RAM 2.3KB 是用户把队列开到
 > 极限的代价——内核本身不失控，但 `mote_event_post_replace` 的临界区
 > 时长也随队列长度线性增长（见 usage.md 附录 A 延迟预算）。
 > tickless 的体积增量只在 `mote_port.o`，不占内核三件套的预算。
@@ -254,7 +257,7 @@ handler 派发链路完整。tickless 档另验证（时间膨胀，1 tick-ms = 
 
 | 宣称 | 证据 | 强度 |
 |---|---|---|
-| API 语义正确（队列/定时器/任务/邮箱） | 4841~8450 条断言全绿 | 强 |
+| API 语义正确（队列/定时器/任务/邮箱） | 4843~8452 条断言全绿 | 强 |
 | 周期定时器/任务无相位漂移 | 漂移回归测试（含迟到触发场景） | 强（逻辑层面） |
 | ms/period/policy 边界运行时校验生效 | test_ms_bound / test_task_ms_bound / test_policy_invalid | 强 |
 | deadline 计算与睡眠判定（next_due/sleep） | test_next_due / test_sleep_deadline | 强（逻辑层面） |
@@ -264,7 +267,7 @@ handler 派发链路完整。tickless 档另验证（时间膨胀，1 tick-ms = 
 | 启动链正确（向量表/SysTick/tick→定时器→事件流） | QEMU 冒烟（Cortex-M3，固定拍） | 中（模拟器，非真硅片） |
 | tickless 空闲路径（长拍重装/时基追平/无漂移） | QEMU tickless 冒烟（Cortex-M3） | 中（模拟器，非真硅片） |
 | 三内核可编译、体积分账受控（三件套+移植层） | 交叉编译 + 分账体积断言（含 tickless 档） | 强 |
-| 覆盖无大面积盲区 | 行覆盖 92.4%（门槛 85%） | 中 |
+| 覆盖无大面积盲区 | 行覆盖 93.7%（门槛 85%） | 中 |
 | 无静态分析告警 | cppcheck 0 告警 | 中 |
 
 > 注意：板级工程构建已实际抓到过 CI 漏掉的 bug（ch32v 临界区恢复的

@@ -21,8 +21,13 @@
  *    的入账协议（要点：以"重装值 - 计数器剩余"入账已流逝时间，
  *    不要回读计数器做入账锚点——写 VAL=0 后存在 0 窗口，会下溢）；
  *    固定拍移植可忽略。
+ *    ⚠ 沿用 port/mote_port.c 的 SysTick 弱符号与 tickless 参考实现时，
+ *    你的 mote_port.h 还需定义 MOTE_WEAK（弱符号关键字）与平台标签
+ *    MOTE_PORT_CORTEXM / MOTE_PORT_CH32（tickless 下选择 SysTick 访问
+ *    方式，缺失即编译期 #error）——照抄 port/cm0plus 或 port/ch32v。
  *
- * 3) 提供临界区 API（保存/恢复式，支持嵌套）：
+ * 3) 提供临界区 API（保存/恢复式，支持嵌套）——注意：这三个 inline
+ *    函数写在你自己的 mote_port.h 里（本模板只覆盖 .c 侧）：
  *      mote_crit_state_t  中断状态类型
  *      mote_crit_enter()  保存当前状态并关中断，返回保存的状态
  *      mote_crit_exit(s)  恢复保存的状态（禁止无条件打开中断）

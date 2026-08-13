@@ -552,7 +552,8 @@ static void uart_handler(uint16_t evt, void *param, void *ctx)
 - `mote_mail_recv` 返回实际存入的字节数（1..格子大小），空柜返回 -1——不会回吐整格残留
 - 一个 handler 可以管多个柜子：靠 `param` 区分是哪个柜子来的
 - 柜子字段被写坏/非法构造时，`mote_mail_recv` 同样返回 -1（运行时拒绝，
-  不让来路不明的柜子参与流转）
+  不让来路不明的柜子参与流转）；**每格的长度域（lens）被写坏为 0 或
+  超过格子大小时同样返回 -1**，不会按垃圾长度去越界读
 
 ### 4.4 放货的顺序为什么是"先入队、后入箱"（新增小节）
 
@@ -805,6 +806,7 @@ static void step1(uint16_t evt, void *param, void *ctx)
 | `mote_mail_send` | 可以 | 可以 |
 | `mote_tick` / `mote_tick_advance` | 可以（移植层专用） | 可以 |
 | `mote_next_due` | 可以 | 可以 |
+| `mote_ticks` / `mote_dropped_count` / `mote_set_drop_hook` | 可以（自带临界区） | 可以 |
 | `mote_timer_start/stop/restart` | 不行 | 可以 |
 | `mote_task_start/stop` | 不行 | 可以 |
 | `mote_mail_recv` | 不行 | 可以 |
@@ -829,6 +831,7 @@ ID 就是值班表的下标，表按"最大 ID+1"占 Flash。ID 写成 200 号�
 |---|---|---|
 | LED 完全不闪 | tick 没接上 | `SysTick_Config` 调了没？`mote_port.c` 加工程没？ |
 | 事件递了没反应 | 值班表没登记 / ID 超界 | `[EVT_X] = MOTE_ENTRY(...)` 写了没？表大小传对没？ |
+| 任务（打卡机）不执行 | 没调 `mote_task_init` / `mote_task_start`，或 id 越界 | main 里两步都调了没？看 `mote_task_start` 返回值（`MOTE_ERR_PARAM` = id 越界或周期非法，`MOTE_ERR_FULL` = 槽位已满） |
 | 偶尔丢数据 | 队列/柜子小了 | `MOTE_EVT_QUEUE_SIZE`、邮箱槽数调大，注意返回值 |
 | 想监控丢了多少事件 | — | 读 `mote_dropped_count()`：因队列满/事件无效被**实际丢弃**的累计数（单次 RETRY 定时器的满队重试不计入——它最终会送达）。想知道"丢的是哪个事件"，用 `mote_set_drop_hook()` 注册回调（注意：钩子在关中断上下文运行，只允许事件/邮箱 API，禁止定时器/任务 API；钩子内再次触发的丢弃不会递归回调本钩子——防重入） |
 | 中断里改全局变量偶发抽风 | 中断和 handler 抢数据 | 数据只走纸条/柜子传，共享变量加临界区 |
@@ -863,6 +866,8 @@ handler 里用 `evt` 参数区分是哪个纸条。
 
 **Q5：没有注册的 ID 递进去会怎样？**
 纸条被内核默默丢掉，不会崩。这是安全网，但也说明你的值班表漏登记了。
+丢弃会被计入 `mote_dropped_count()` 并触发丢事件钩子（如果注册了）——
+所以漏登记的事件在可靠性监控里是"看得见"的，不是无声无息。
 
 **Q6：任务和"定时器+事件"到底选哪个？**
 任务 = 固定节奏的周期活（扫描、刷新、喂狗），且不需要在别处被触发；

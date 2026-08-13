@@ -45,9 +45,10 @@ target_compile_options(test_moteos PRIVATE -Wall -Wextra -Werror)
 
 add_test(NAME moteos_unit COMMAND test_moteos)
 
-# 断言开启构建：默认 MOTE_ASSERT 为 ((void)0)，断言路径从不参与编译。
-# 强制 -include tests/mote_assert.h（在 mote_config.h 之前生效），
-# 使内核断言路径被真实编译并运行；测试全程不应触发任何断言。
+# 断言开启构建：mote_config.h 的 MOTE_ASSERT 默认已开启（回调弱符号
+# mote_assert_fail，宿主机实现为 abort）。本目标强制 -include tests/mote_assert.h
+# （在 mote_config.h 之前生效），把 MOTE_ASSERT 替换为"打印位置 + abort"，
+# 使内核断言路径被真实编译并运行、触发即打印并终止；测试全程不应触发任何断言。
 add_executable(test_moteos_assert ${MOTEOS_TEST_SOURCES})
 
 target_include_directories(test_moteos_assert PRIVATE

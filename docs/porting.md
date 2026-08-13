@@ -73,6 +73,16 @@ MoteOS 是个"事件驱动的协作式内核"。把它想象成工厂的调度�
 | STM32F103（M3） | Keil MDK | `moteos/port/cm3/` |
 | 其他芯片 | 任意 | 看第 4 章（从模板写） |
 
+> **WCH 两代 SDK 的差别（重要）**：CH32V003/V007 是 V2 代，port 默认包含
+> `ch32v00x.h`，什么都不用配。CH32V203/V307 是 V3 代，用同一个 `ch32v`
+> 目录，但**必须在工程宏定义里加**：
+> `-DMOTE_CH32_HAL_HEADER=<ch32v20x.h>`（V203，中型）或
+> `-DMOTE_CH32_HAL_HEADER=<ch32v30x.h>`（V307，大型）。
+> 另外青稞的临界区开关寄存器 INTSYSCR 默认按 CSR `0x800` 处理，不同代次
+> 手册的映射可能有差异：上板前按目标芯片手册核验，不一致就用
+> `-DMOTE_CH32_INTSYSCR=<值>` 覆盖——**这直接决定关中断和 wfi 行为，
+> 是检查清单里的必测项**（见第 7 章）。
+
 ---
 
 ## 第 1 章：路线 A —— Keil MDK + STM32F103（ARM 芯片）
@@ -306,8 +316,12 @@ void SysTick_Handler(void)
 > 现在你只在开门时多喊一嗓子 `mote_tick()`——告诉内核"过了一拍"。
 > 你原来开门时干的活（延时计数之类的）原样保留，互不打扰。
 
-3. 如果想让空闲时省电，在你自己的 `mote_idle()` 里执行 wfi（不提供也行，
-   但低功耗卖点就没了）。注意签名带 deadline 入参：
+3. 空闲时的 wfi **不需要你写**：`mote_port.c` 自带的 `mote_idle()` 就是一条
+   wfi（固定拍）——低功耗默认就有。只有在你**把 `mote_port.c` 从工程剔除**、
+   自己写 port 实现（见第 4 章模板）时，才需要自写 `mote_idle`。注意它是
+   **强符号**（与弱符号 `SysTick_Handler` 不同），不能一边留着 `mote_port.c`
+   一边再写一个同名函数，否则链接报 `mote_idle multiply defined`。
+   签名带 deadline 入参：
 
 ```c
 void mote_idle(uint32_t next_due)   /* next_due：内核给出的下一到期节拍 */
@@ -320,7 +334,8 @@ void mote_idle(uint32_t next_due)   /* next_due：内核给出的下一到期节
 > 白话解释：内核空闲时会来问一句"没事干，我想睡会儿，怎么睡？"——
 > 这个函数就是你的回答："闭眼打盹（wfi）"。门铃一响它自动睁眼，不用你管。
 > `next_due` 是内核顺口告诉你的"下一件到点的事在几点"，固定拍模式下用不上，
-> 先无视它（`(void)next_due;` 就是"收到，但我不看"）。
+> 先无视它（`(void)next_due;` 就是"收到，但我不看"）。**留用 `mote_port.c`
+> 的话这段代码一行都不用写**——它自带的回答就是 wfi。
 
 4. 头文件路径照第 1.4/2.4 节加。
 
@@ -347,7 +362,8 @@ while (1) {
 
 这一章要干成的事：**第 0 章表格里没有你的芯片时，自己动手写"接线方案"**。
 好消息是：不用发明，只对照抄。打开 `moteos/port/mote_port_template.c`，
-它就是全部答案（一份填空式参考答案）。三步，对应内核要的三样东西。
+它就是全部答案（一份填空式参考答案，注释里列了四步）。四步 = 内核要的
+三样东西（tick、wfi、临界区）+ 一个断言失败处理（4.5 节）。
 
 ### 4.1 tick：让定时器中断叫内核
 
@@ -513,14 +529,14 @@ void mote_idle(uint32_t next_due)
 > 切换过（比如从内部振荡器切到外部晶振），填 `MOTE_PORT_HCLK_HZ` 时
 > 要填**切换完成后最终那个值**，别填出厂默认值。
 
-### 4.3 临界区：四个小函数（保存/恢复式）
+### 4.4 临界区：三个小函数（保存/恢复式）
 
 先白话讲清临界区为什么存在：中断（门铃）随时可能打断正在干活的代码。
 假如主循环正在往账本上写"第 5 号事件"，写到一半门铃响了、门铃那位也来
 往账本上写东西——账本就被写花了。对策：**写账本期间挂"请勿打扰"牌子**
 （关中断），写完再摘（开中断）。
 
-新建 `mote_port.h`，提供四个接口：
+新建 `mote_port.h`，提供中断状态类型加三个函数：
 
 ```c
 #ifndef MOTE_PORT_H
@@ -548,7 +564,7 @@ static inline uint32_t mote_crit_active(void)
 #endif
 ```
 
-> 白话解释这四个函数各干什么：
+> 白话解释这三个函数各干什么：
 > - `mote_crit_enter()`：挂牌子。但挂牌前先看一眼牌子原来挂没挂，把"原来
 >   的状态"记在小纸条上带回来；
 > - `mote_crit_exit(s)`：摘牌子。**按小纸条恢复原状**——原来就没挂牌子，
@@ -576,9 +592,38 @@ static inline uint32_t mote_crit_active(void)
 
 > 白话解释表格：每颗芯片"挂牌子的开关"位置不一样——ARM 家族的叫 PRIMASK、
 > WCH RISC-V 的叫 INTSYSCR、AVR 的叫 SREG，但功能都是"门铃总开关"。
-> 移植层的活就是：把开关位置找出来，包成上面四个函数的形状。
+> 移植层的活就是：把开关位置找出来，包成上面几个接口的形状。
 > "不依赖 CMSIS"意思是直接用汇编摸开关，不借厂商的工具箱——
 > 这样在 GCC、AC6、AC5 各种翻译官手里都能编译过。
+
+> **还差两个小东西（照抄现成 port 头即可）**：如果你要沿用 `mote_port.c`
+> 的 SysTick 弱符号与 tickless 参考实现，你的 `mote_port.h` 还要定义——
+> ① `MOTE_WEAK`：弱符号关键字（GCC/Clang 用 `__attribute__((weak))`）；
+> ② 平台标签 `MOTE_PORT_CORTEXM` 或 `MOTE_PORT_CH32`：tickless 下内核据此
+> 选择 SysTick 访问方式（24 位向下计数 / 64 位比较寄存器），缺失会直接
+> `#error`。两样都只需从 `port/cm0plus` 或 `port/ch32v` 的对应行抄过来。
+
+### 4.5 断言失败处理：mote_assert_fail（第四步）
+
+内核的 `MOTE_ASSERT` 默认开启，触发时会回调 `mote_assert_fail(file, line)`。
+它是**弱符号**：`mote_port.c` 自带一个"停机死循环"的默认实现；按本章自写
+port 时（模板已替你写好），可以把停机换成复位或先记录再停机：
+
+```c
+void mote_assert_fail(const char *file, int line)
+{
+    /* 例：把 file/line 记进日志区，然后复位芯片（NVIC_SystemReset 等） */
+    (void)file;
+    (void)line;
+    for (;;) { }   /* 默认：停机，方便调试器抓现场 */
+}
+```
+
+> 白话解释：断言 = 内核给自己设的"保险丝"——发现账本出现不可能的状态
+> （内部 bug）就熔断。默认熔断方式是"原地停机"，调试器一看就知道停在哪；
+> 产品里常换成"记录位置 → 复位"，让设备自己重启而不是死机。
+> 生产环境想彻底关掉断言（省 Flash/周期），构建时定义
+> `-DMOTE_ASSERT(x)=((void)0)` 即可。
 
 ---
 
@@ -773,7 +818,7 @@ handler 运行在主循环上下文，所以**全部 API 都能调**：`mote_eve
 > 根本没闭眼（函数被覆盖或没实现）；闭眼了还想更省，就上 tickless。
 
 **Q7：MOTE_TICK_MS 改成 10 会怎样？**
-tick 变成 10ms 一拍，`SysTick_Config(SystemCoreClock / (1000 / MOTE_TICK_MS))` 保持这个公式即可，定时器精度变粗但更省电。tickless 模式下 deadline 计算也基于这一拍宽，无需额外处理。
+tick 变成 10ms 一拍，`SysTick_Config(SystemCoreClock / (1000 / MOTE_TICK_MS))` 保持这个公式即可，定时器精度变粗但更省电。tickless 模式下 deadline 计算也基于这一拍宽，无需额外处理。取值范围 1..1000，越界会编译期 `#error` 直接拦下（防静默出错）。
 
 > 白话补充：心跳从 1ms 一拍放缓到 10ms 一拍，闹钟的最小刻度就变成 10ms，
 > 精度粗了、但醒来的次数少了、更省电。公式不用改——它本来就是按拍宽算的。
@@ -808,7 +853,7 @@ tick 变成 10ms 一拍，`SysTick_Config(SystemCoreClock / (1000 / MOTE_TICK_MS
 你的板子只有你自己能验。
 
 - [ ] 编译 0 error 0 warning（开 `-Wall -Wextra -Werror`，与 CI 同口径）
-- [ ] 内核体积核对：map 文件里内核三件套 text <2.75KB（RV32）/ <2.5KB（M0+）、移植层 port text <512B、RAM <512B（本机实测 M0+ 三件套 2297B / port 14B / RAM 280B，见 README 与 docs/test.md）
+- [ ] 内核体积核对：map 文件里内核三件套 text <2.75KB（RV32）/ <2.5KB（M0+）、移植层 port text <512B、RAM <512B（本机实测 M0+ 三件套 2297B / port 14B / RAM 280B，见 README 与 docs/test.md；体积随工具链版本小幅浮动，以 CI 阈值与你自己 map 文件为准）
 - [ ] map 文件里 `SysTick_Handler` 只出现一次（在 mote_port.o 里）
 - [ ] LED 闪烁周期用逻辑分析仪/示波器实测 ≈ 设定值
 - [ ] **中断延迟实测**：DWT CYCCNT 或 GPIO 示波器测 `mote_mail_send` 最坏路径（方法见使用教程附录 A），确认符合你的延迟预算

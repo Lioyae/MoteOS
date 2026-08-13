@@ -74,6 +74,27 @@
   不再零执行覆盖。局限：深睡（wfi 长保持）与 wrap 标志路径在 QEMU 下
   无法验证，仍需板级实测
 
+### 文档
+
+- **教程与实现逐项核对（代码审查整改）**：`docs/porting.md` / `docs/usage.md`
+  / `docs/test.md` 全面校对——
+  - porting 第 3 章修正误导："自写 `mote_idle` 省电"实为**强符号**，留用
+    `mote_port.c` 时再写同名函数会链接冲突；默认实现本就是 wfi
+  - porting 第 4 章章节编号修复（两节重复编号 4.3），补 4.5 断言失败
+    处理（`mote_assert_fail` 弱符号）；临界区模板补 `MOTE_WEAK` 与平台
+    标签说明（沿用 `mote_port.c` tickless 参考实现的必要条件）
+  - porting 0.3 补 WCH V3 代 SDK 指引：CH32V203/V307 需工程级
+    `-DMOTE_CH32_HAL_HEADER=<ch32v20x.h>/<ch32v30x.h>`，并上板核验
+    `MOTE_CH32_INTSYSCR`；Q7 补 `MOTE_TICK_MS` 1..1000 编译期校验
+  - usage 铁律 3 表补可观测 API（`mote_ticks`/`mote_dropped_count`/
+    `mote_set_drop_hook` 任意上下文可用）；Q5 补"未注册 ID 的丢弃计入
+    计数并触发钩子"；邮箱注意项补长度域写坏拒绝；排查表补"任务不执行"
+  - test 实测数字刷新：断言数 4843/8452（邮箱长度域校验 +2）、覆盖率
+    93.7%（mote_mail.c 67 行/64 覆盖）、体积注明随工具链版本浮动
+    （gcc 14.3.1 实测三件套 2343B，CI 阈值 <2560 为准）
+  - `moteos/port/mote_port_template.c` 注释补 `MOTE_WEAK`/平台标签说明，
+    并明确临界区 API 属于 `mote_port.h` 侧；文档站源副本已同步并重新构建
+
 ## v0.5.0 - 2026-08-13（开发预览，破坏性变更）
 
 按技术评审整改：定时器排序、deadline 感知睡眠 + tickless、校验口径统一、
