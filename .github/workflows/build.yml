@@ -119,7 +119,7 @@ jobs:
           TEXT=$(riscv-none-elf-size -t mote.o mote_task.o mote_mail.o | tail -1 | awk '{print $1}')
           RAM=$(riscv-none-elf-size -t mote.o mote_task.o mote_mail.o | tail -1 | awk '{print $2+$3}')
           echo "rv32 kernel: text=${TEXT}B ram=${RAM}B"
-          test "$TEXT" -lt 2560 || { echo "kernel text too large"; exit 1; }
+          test "$TEXT" -lt 2816 || { echo "kernel text too large"; exit 1; }
           test "$RAM" -lt 512 || { echo "kernel ram too large"; exit 1; }
           rm -f *.o
 

@@ -203,13 +203,14 @@ handler 派发链路完整。整个过程 semihosting 无异常。
 | Cortex-M0+ | 默认，`-Os` | 2238 B | 280 B | CI：text <2560、RAM <512 ✅ |
 | Cortex-M0+ | 队列 255 / 延时 16，`-Os` | 2262 B | 2384 B | 仅编译（最坏配置体积仅记录） |
 | Cortex-M3 | 默认，无 `-Os` | 4469 B | 280 B | 仅编译 ✅ |
-| RV32IMC（青稞） | 默认，`-Os` | 约 2.0KB（2004 B） | 约 280 B | CI：text <2560、RAM <512 ✅ |
+| RV32IMC（青稞） | 默认，`-Os` | 2740 B | 280 B | CI：text <2816、RAM <512 ✅ |
 | Cortex-M0+/M3/RV32 | `MOTE_TICKLESS=1`（port.o 增量） | +320~360 B（仅 port 层） | +12 B | 仅编译 ✅ |
 
-> M0+/M3 数字为本地实测；RV32 数字为 CI 交叉编译 job 实测记录
-> （本地无 RISC-V 工具链）。队列 255 配置的 RAM 2.3KB 是用户把队列开到
-> 极限的代价——内核本身不失控，但 `mote_event_post_replace` 的临界区
-> 时长也随队列长度线性增长（见 usage.md 附录 A 延迟预算）。
+> M0+/M3/RV32 数字为本地实测（RV32 用 WCH gcc 15.2 与 CI 的 xpack gcc
+> 15.2 结果一致）；RV32 体积断言因评审整改新增 deadline/延时 API 上调为
+> text <2816（2.75KB），M0+ 维持 <2560。队列 255 配置的 RAM 2.3KB 是用户
+> 把队列开到极限的代价——内核本身不失控，但 `mote_event_post_replace` 的
+> 临界区时长也随队列长度线性增长（见 usage.md 附录 A 延迟预算）。
 > tickless 的体积增量只在 `mote_port.o`，不占内核三件套的预算。
 
 ### 2.7 集成编译（CI）

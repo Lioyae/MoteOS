@@ -313,6 +313,31 @@ mote_status_t mote_timer_restart(mote_timer_t *t, uint32_t ms)
     return MOTE_OK;
 }
 
+#if MOTE_DELAYED_MAX > 0
+/* 延时槽池查找助手（调用者须已持有临界区）。
+ * 三个 delayed API 共用，避免各自内联一份线性扫描 */
+static int mote_delayed_find_free(void)
+{
+    for (int i = 0; i < MOTE_DELAYED_MAX; i++) {
+        if (!s_delayed[i].used) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static int mote_delayed_find_evt(uint16_t evt, void *param, bool match_param)
+{
+    for (int i = 0; i < MOTE_DELAYED_MAX; i++) {
+        if (s_delayed[i].used && s_delayed[i].evt == evt &&
+            (!match_param || s_delayed[i].param == param)) {
+            return i;
+        }
+    }
+    return -1;
+}
+#endif
+
 mote_status_t mote_event_post_delayed(uint16_t evt, void *param, uint32_t ms)
 {
     /* 时长运行时校验（与定时器 API 同口径，不依赖可被关闭的 MOTE_ASSERT）：
@@ -322,26 +347,24 @@ mote_status_t mote_event_post_delayed(uint16_t evt, void *param, uint32_t ms)
         return MOTE_ERR_PARAM;
     }
 #if MOTE_DELAYED_MAX > 0
-    int free_slot = -1;
     mote_status_t st;
     mote_crit_state_t cs;
 
     cs = mote_crit_enter();
 
-    for (int i = 0; i < MOTE_DELAYED_MAX; i++) {
-        if (!s_delayed[i].used && free_slot < 0) {
-            free_slot = i;
+    {
+        int i = mote_delayed_find_free();
+
+        if (i < 0) {
+            mote_note_dropped(evt); /* 口径统一：被拒绝的延时投递也计入 */
+            st = MOTE_ERR_FULL;
+        } else {
+            s_delayed[i].used = 1;
+            s_delayed[i].due = s_tick + ms;
+            s_delayed[i].evt = evt;
+            s_delayed[i].param = param;
+            st = MOTE_OK;
         }
-    }
-    if (free_slot < 0) {
-        mote_note_dropped(evt); /* 口径统一：被拒绝的延时投递也计入 */
-        st = MOTE_ERR_FULL;
-    } else {
-        s_delayed[free_slot].used = 1;
-        s_delayed[free_slot].due = s_tick + ms;
-        s_delayed[free_slot].evt = evt;
-        s_delayed[free_slot].param = param;
-        st = MOTE_OK;
     }
     mote_crit_exit(cs);
     MOTE_TEST_INJECT();
@@ -373,18 +396,19 @@ mote_status_t mote_event_post_delayed_replace(uint16_t evt, void *param,
 
     cs = mote_crit_enter();
 
-    /* replace 语义：同 evt 已存在则原地替换为最新（只留最新一份） */
-    for (int i = 0; i < MOTE_DELAYED_MAX; i++) {
-        if (s_delayed[i].used && s_delayed[i].evt == evt) {
+    {
+        /* replace 语义：同 evt 已存在则原地替换为最新（只留最新一份） */
+        int i = mote_delayed_find_evt(evt, NULL, false);
+
+        if (i >= 0) {
             s_delayed[i].due = s_tick + ms;
             s_delayed[i].param = param;
             mote_crit_exit(cs);
             MOTE_TEST_INJECT();
             return MOTE_OK;
         }
-    }
-    for (int i = 0; i < MOTE_DELAYED_MAX; i++) {
-        if (!s_delayed[i].used) {
+        i = mote_delayed_find_free();
+        if (i >= 0) {
             s_delayed[i].used = 1;
             s_delayed[i].due = s_tick + ms;
             s_delayed[i].evt = evt;
@@ -417,9 +441,10 @@ mote_status_t mote_event_cancel_delayed(uint16_t evt, void *param)
 #if MOTE_DELAYED_MAX > 0
     mote_crit_state_t cs = mote_crit_enter();
 
-    for (int i = 0; i < MOTE_DELAYED_MAX; i++) {
-        if (s_delayed[i].used && s_delayed[i].evt == evt &&
-            s_delayed[i].param == param) {
+    {
+        int i = mote_delayed_find_evt(evt, param, true);
+
+        if (i >= 0) {
             s_delayed[i].used = 0;
             mote_crit_exit(cs);
             return MOTE_OK;
@@ -499,22 +524,25 @@ static void mote_process_timers(void)
     }
 
 #if MOTE_DELAYED_MAX > 0
-    for (int i = 0; i < MOTE_DELAYED_MAX; i++) {
-        uint16_t evt;
-        void *param;
-        bool fire;
+    {
+        /* 整个槽池扫描共用一段临界区（此前每槽一对临界区）：
+         * 更短代码、更稳的中断延迟；事件投递的嵌套临界区安全 */
         mote_crit_state_t cs = mote_crit_enter();
 
-        fire = s_delayed[i].used && (int32_t)(s_tick - s_delayed[i].due) >= 0;
-        if (fire) {
-            s_delayed[i].used = 0;
-            evt = s_delayed[i].evt;
-            param = s_delayed[i].param;
+        for (int i = 0; i < MOTE_DELAYED_MAX; i++) {
+            uint16_t evt;
+            void *param;
+            bool fire = s_delayed[i].used &&
+                        (int32_t)(s_tick - s_delayed[i].due) >= 0;
+
+            if (fire) {
+                s_delayed[i].used = 0;
+                evt = s_delayed[i].evt;
+                param = s_delayed[i].param;
+                mote_event_post(evt, param); /* 失败计丢失数 */
+            }
         }
         mote_crit_exit(cs);
-        if (fire) {
-            mote_event_post(evt, param); /* 失败计丢失数 */
-        }
     }
 #endif
 }
@@ -554,14 +582,12 @@ bool mote_poll(void)
     return false;
 }
 
-/* 内核已知的下一到期节拍；无待到期项返回 MOTE_TICK_NONE。
+/* 内核已知的下一到期节拍（调用者须已持有临界区）。
  * 定时器链表有序 → 表头即最早（O(1)）；延时槽线性扫（O(MOTE_DELAYED_MAX)） */
-uint32_t mote_next_due(void)
+static uint32_t mote_next_due_locked(void)
 {
-    uint32_t best;
-    mote_crit_state_t cs = mote_crit_enter();
+    uint32_t best = (s_timers != NULL) ? s_timers->due : MOTE_TICK_NONE;
 
-    best = (s_timers != NULL) ? s_timers->due : MOTE_TICK_NONE;
 #if MOTE_DELAYED_MAX > 0
     for (int i = 0; i < MOTE_DELAYED_MAX; i++) {
         if (s_delayed[i].used &&
@@ -571,6 +597,19 @@ uint32_t mote_next_due(void)
         }
     }
 #endif
+    return best;
+}
+
+/* 内核已知的下一到期节拍；无待到期项返回 MOTE_TICK_NONE。
+ * 自带临界区，任意上下文安全，供 tickless 移植层与低功耗应用
+ * 决策休眠时长。注意：返回的是"节拍时刻"而非"剩余毫秒"，
+ * 须与 mote_ticks() 做回绕安全比较 ((int32_t)(due - now) > 0 表示未到期) */
+uint32_t mote_next_due(void)
+{
+    uint32_t best;
+    mote_crit_state_t cs = mote_crit_enter();
+
+    best = mote_next_due_locked();
     mote_crit_exit(cs);
     return best;
 }
@@ -585,7 +624,7 @@ void mote_sleep(void)
     mote_crit_state_t cs = mote_crit_enter();
 
     if (s_q.count == 0) {
-        uint32_t next_due = mote_next_due();
+        uint32_t next_due = mote_next_due_locked();
 
         if (next_due == MOTE_TICK_NONE || (int32_t)(next_due - s_tick) > 0) {
             mote_idle(next_due); /* 在关中断状态下调用（契约见 mote.h） */
