@@ -1,5 +1,62 @@
 # 更新日志
 
+## 未发布（2026-08-13，独立技术评审整改）
+
+按外部技术评审（掉计数口径、钩子重入、tickless 覆盖、体积口径、契约文案）
+整改：
+
+### 修复
+
+- **RETRY 重试不再计入丢弃统计（口径修复）**：单次 RETRY 定时器满队时的
+  暂缓重试此前经 `mote_event_post` 失败路径计入 `mote_dropped_count()` 并
+  触发丢事件钩子——事件最终仍送达却被记为"丢弃"，可靠性监测被假阳性
+  污染。现在重试走不计数入队（`mote_event_enqueue_raw`）；周期定时器
+  满队丢当次、DROP 策略失败即弃等真实丢失仍照常计数。`mote.h` 中
+  `mote_dropped_count()` 的文档口径同步收紧
+- **邮箱入箱/入队顺序改为"先入队、后入箱"**：消除"count 已递增、回滚
+  未发生"的中间状态——丢事件钩子（在 `mote_note_dropped` 内、同一临界
+  区中）重入同一邮箱时，观察到的邮箱状态始终自洽；回滚代码整段删除
+  （入队失败时邮箱未动，全有或全无自然成立）
+- **tickless 入账协议重写（P0，QEMU 冒烟实抓）**：旧协议回读计数器快照
+  做入账锚点，写 VAL=0 后计数器存在 0 窗口（真实硬件一拍沿、分频时钟下
+  可长达整拍；QEMU 的 ptimer 重载事件与 TCG 批执行之间同样有竞态），
+  回读值为 0 时"锚点 - 剩余"整段下溢——QEMU 冒烟实测时基一次跳变约
+  179 秒。新协议：锚点恒等于重装值（"重装值 - 剩余"结构上不可能下溢），
+  wrap 靠 COUNTFLAG/CNTIF 读清零判别、ISR 与 idle 追平互斥入账整拍
+  （消除部分拍与整拍的双重入账），rem==0 窗口特判；顺带消除全部 64 位
+  软件除法（idle 关中断路径）
+- **tickless 空闲路径消除 64 位软件除法**：`mote_acc_flush_ms` 与 nap 上限
+  计算改用编译期常量 `MOTE_CYCLES_PER_MS`/`MOTE_MAX_NAP_MS_CONST`
+  （常数除数折叠为乘加移位），关中断路径不再有 `udivdi3` 量级的软件
+  除法——旧实现连裸机链接都缺 `__aeabi_uldivmod` 符号；`mote_idle`
+  契约文案同步改写为与实现一致的口径。HCLK 非 1000 整数倍时 nap 向下
+  取整——只早不迟，安全性优先
+- **青稞 port 支持 V3 代 SDK**：`MOTE_CH32_HAL_HEADER` 宏选择器件头
+  （默认 `ch32v00x.h`；CH32V203/V307 用 `-DMOTE_CH32_HAL_HEADER=<ch32v20x.h>`
+  等覆盖），同时新增 `MOTE_PORT_CH32` 体系标签；tickless 编译新增平台
+  标签守卫（缺失即 `#error`，不再静默落入青稞分支）
+- **体积断言分账化**：CI 对内核三件套（mote.o/mote_task.o/mote_mail.o）与
+  移植层 `mote_port.o` 分别设限（port text <512B、总 RAM <512B），移植层
+  不再游离在断言之外；README/测试文档体积口径同步改写
+- **README 措辞**："零汇编"改为"无独立汇编文件（临界区/休眠为内联汇编）"
+
+### 测试
+
+- `test_timer`：`test_one_shot_survives_full_queue` 新增 RETRY 不计丢弃断言
+- `test_mail`：新增 `test_hook_reenter_same_mailbox`（钩子重入同一邮箱，
+  验证无残留、计数一致）
+- **QEMU tickless 冒烟**（`tests/qemu/cm3/main_tickless.c`）：tickless 空闲
+  路径首次被实际执行。QEMU 的 WFI 模型在"重装 SysTick 后立即 wfi"时产生
+  伪唤醒（ptimer 重载事件唤醒被 halt 的 vCPU），深睡退化为微秒级轮询；
+  故采用**时间膨胀**（`MOTE_PORT_HCLK_HZ=24000`，1 tick-ms = 24 计数器
+  周期，入账数学与换算率无关），1000ms 周期定时器 3 拍后 `mote_ticks()`
+  落在 [3000, 4000]（下界抓入账跑快；上界为 QEMU SysTick ptimer 在
+  wrap 后"计数器 0 等待重载"状态被 TCG 批拉长导致的时间滞后留余量——
+  仿真模型行为，非内核缺陷），丢事件计数必须为 0；CI `qemu-smoke`
+  新增该档。该冒烟已实抓旧入账协议的下溢 bug（见上）——tickless 路径
+  不再零执行覆盖。局限：深睡（wfi 长保持）与 wrap 标志路径在 QEMU 下
+  无法验证，仍需板级实测
+
 ## v0.5.0 - 2026-08-13（开发预览，破坏性变更）
 
 按技术评审整改：定时器排序、deadline 感知睡眠 + tickless、校验口径统一、

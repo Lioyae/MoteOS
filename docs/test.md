@@ -15,8 +15,8 @@
 | 3 | 防御 | 断言开启构建 | `MOTE_ASSERT` 路径被真实编译并运行 | host-tests（ctest 内置） |
 | 4 | 边界 | 最坏配置构建（队列 255 等） | 极端配置下的正确性 | host-tests + cross-compile |
 | 5 | 内存 | ASan/UBSan | 内存错误、未定义行为 | sanitizers |
-| 6 | 真实启动 | QEMU 冒烟（Cortex-M3） | 启动/向量表/SysTick/tick→定时器→事件流 | qemu-smoke |
-| 7 | 可编译性 | 交叉编译 + 体积断言 | M0+/M3/RV32 可编译、体积不失控 | cross-compile |
+| 6 | 真实启动 | QEMU 冒烟（Cortex-M3，固定拍 + tickless 双档） | 启动/向量表/SysTick/tick→定时器→事件流；tickless：入账追平/nap 重装/固定拍恢复/漂移检测（时间膨胀执行） | qemu-smoke |
+| 7 | 可编译性 | 交叉编译 + 体积断言 | M0+/M3/RV32 可编译、内核三件套 + 移植层分账体积不失控 | cross-compile |
 | 8 | 集成 | 真实 SDK 例程编译 | CMSIS/WCH SDK 真实头文件下例程可编译（例程已启用 tickless） | cross-compile |
 | 9 | 可编译性 | tickless 交叉编译（`MOTE_TICKLESS=1`） | 三种架构的 SysTick 重装/追平代码可编译 | cross-compile |
 | 10 | 覆盖 | gcovr 行覆盖 ≥85% 门槛 | 测试没有大面积盲区 | coverage |
@@ -97,10 +97,30 @@ MOTE_TASK_SLOT_MAX  = 16
 
 - 机器：`stm32vldiscovery`（STM32F100，Cortex-M3，与 `port/cm3` 对应）
 - 最小启动代码：`startup.c`（向量表含 SysTick 项）+ `link.ld`，无器件库依赖
-- 验证链：Reset 进 main → SysTick 向量接到弱符号 `SysTick_Handler`
-  → `mote_tick` → 500ms 周期定时器到期 → 事件投递 → handler 派发
-- 判定：semihosting 打印 `QEMU_PASS` / `QEMU_FAIL: timer/event flow broken`，
-  随后 SYS_EXIT；向量表/SysTick 断掉则死循环 → CI `timeout 60s` 判失败
+- 固定拍档（`main.c`）：验证链 Reset 进 main → SysTick 向量接到弱符号
+  `SysTick_Handler` → `mote_tick` → 500ms 周期定时器到期 → 事件投递 →
+  handler 派发
+- **tickless 档（`main_tickless.c`，`-DMOTE_TICKLESS=1 -DMOTE_PORT_HCLK_HZ=24000u`）**：
+  覆盖固定拍不编译的整个 tickless 空闲分支——
+  1000ms 周期定时器，`mote_sleep`→`mote_idle` 的时基追平
+  （COUNTFLAG 读清零、重装值差额、周期余数）、nap 钳制与唤醒后 ISR
+  恢复固定拍。**漂移检测**：第 3 拍落在 tick [3000, 4000]——下界 3000
+  抓"入账跑快"（双重入账/重复计整拍会让定时器提前触发）；上界 4000
+  是给 QEMU 模型行为留的余量（SysTick ptimer 在 wrap 后"计数器 0 等待
+  重载"的状态会被单个 TCG 批拉长，批执行期间事件不处理、真实时间不
+  入账，滞后随宿主负载波动，实测数十 ms 量级——属仿真模型行为，非
+  内核缺陷；真实芯片按 3000±20 校核即可）；另断言 `mote_dropped_count()==0`
+  - **时间膨胀**：QEMU 的 WFI 模型在"重装 SysTick 后立即 wfi"时产生
+    伪唤醒（ptimer 重载事件唤醒被 halt 的 vCPU），深睡退化为微秒级
+    轮询；按真实 24MHz 换算，3000 拍需执行约 720 亿条宿主指令，CI
+    时限内跑不完。故把换算常量 HCLK 设为 24kHz——1 个 tick-ms = 24 个
+    计数器周期，入账数学与换算率无关，全部路径照常执行且漂移检测
+    精度不受影响（计数器周期精确）。代价：深睡（wfi 长保持）与 wrap
+    标志路径在 QEMU 下无法验证，仍需板级实测
+  - 本档曾实抓出旧入账协议的真实 bug（回读计数器做锚点 → 0 窗口竞态
+    → 无符号下溢 → 时基一次跳变约 179 秒），详情见 CHANGELOG
+- 判定：semihosting 打印 `QEMU_PASS` / `QEMU_FAIL`，随后 SYS_EXIT；
+  向量表/SysTick 断掉则死循环 → CI `timeout 60s` 判失败
 
 **实现中踩过的坑（记录在案）**：
 
@@ -159,9 +179,10 @@ moteos/mote.c               494 行  456 覆盖   92%   （未覆盖：MOTE_DELA
 moteos/mote_mail.c           87 行   82 覆盖   94%   （未覆盖：参数校验分支）
 moteos/mote_task.c           41 行   39 覆盖   95%
 moteos/port/host/mote_port.h 17 行   17 覆盖  100%
-moteos/port/mote_port.c       8 行    4 覆盖   50%   ← 仅宿主分支参与编译；目标机分支
-                                                     （SysTick/tickless/wfi）由交叉编译
-                                                     + QEMU 冒烟覆盖
+moteos/port/mote_port.c       8 行    4 覆盖   50%   ← 仅宿主分支参与 gcovr；目标机分支
+                                                      （SysTick/tickless/wfi）由交叉编译
+                                                      + QEMU 冒烟覆盖（tickless 档实际
+                                                      执行 tickless 空闲路径）
 TOTAL                       647 行  598 覆盖   92.4%
 ```
 
@@ -189,28 +210,34 @@ Checking moteos/port/mote_port_template.c ...
 ### 2.5 QEMU 冒烟（Cortex-M3，stm32vldiscovery）
 
 ```
-QEMU_PASS
+固定拍：   QEMU_PASS
+tickless： QEMU_PASS
 ```
 
 判定通过：Reset 正常进入 main；SysTick 中断向量正确命中弱符号
 `SysTick_Handler`；tick 驱动 500ms 周期定时器到期 2 次；事件投递与
-handler 派发链路完整。整个过程 semihosting 无异常。
+handler 派发链路完整。tickless 档另验证（时间膨胀，1 tick-ms = 24
+计数器周期）：1000ms 周期定时器经分段 nap 3 拍后 ticks 落在
+[3000, 4000]（下界抓入账跑快，上界为 QEMU ptimer 重载滞后的仿真
+余量；无漏记/重复入账类漂移），丢事件计数为 0。整个过程 semihosting
+无异常。
 
 ### 2.6 交叉编译与体积（arm-none-eabi-gcc，`-Wall -Wextra -Werror`）
 
 | 目标 | 配置 | text | data+bss | 断言 |
 |---|---|---|---|---|
-| Cortex-M0+ | 默认，`-Os` | 2238 B | 280 B | CI：text <2560、RAM <512 ✅ |
+| Cortex-M0+ | 默认，`-Os` | 内核 2238 B + port.o <512 B | 280 B | CI：内核 text <2560、port text <512、RAM <512 ✅ |
 | Cortex-M0+ | 队列 255 / 延时 16，`-Os` | 2262 B | 2384 B | 仅编译（最坏配置体积仅记录） |
 | Cortex-M3 | 默认，无 `-Os` | 4469 B | 280 B | 仅编译 ✅ |
-| RV32IMC（青稞） | 默认，`-Os` | 2740 B | 280 B | CI：text <2816、RAM <512 ✅ |
-| Cortex-M0+/M3/RV32 | `MOTE_TICKLESS=1`（port.o 增量） | +320~360 B（仅 port 层） | +12 B | 仅编译 ✅ |
+| RV32IMC（青稞） | 默认，`-Os` | 内核 2740 B + port.o <512 B | 280 B | CI：内核 text <2816、port text <512、RAM <512 ✅ |
+| Cortex-M0+/M3/RV32 | `MOTE_TICKLESS=1`（port.o 增量） | +320~360 B（仅 port 层） | +12 B | 编译 + QEMU tickless 冒烟（M3） ✅ |
 
-> M0+/M3/RV32 数字为本地实测（RV32 用 WCH gcc 15.2 与 CI 的 xpack gcc
-> 15.2 结果一致）；RV32 体积断言因评审整改新增 deadline/延时 API 上调为
-> text <2816（2.75KB），M0+ 维持 <2560。队列 255 配置的 RAM 2.3KB 是用户
-> 把队列开到极限的代价——内核本身不失控，但 `mote_event_post_replace` 的
-> 临界区时长也随队列长度线性增长（见 usage.md 附录 A 延迟预算）。
+> 体积断言为**分账口径**：内核三件套（mote.o/mote_task.o/mote_mail.o）
+> 与移植层 mote_port.o（SysTick/临界区/idle）分别设限，移植层不再游离
+> 在断言之外。M0+/M3/RV32 数字为本地实测（RV32 用 WCH gcc 15.2 与 CI 的
+> xpack gcc 15.2 结果一致）。队列 255 配置的 RAM 2.3KB 是用户把队列开到
+> 极限的代价——内核本身不失控，但 `mote_event_post_replace` 的临界区
+> 时长也随队列长度线性增长（见 usage.md 附录 A 延迟预算）。
 > tickless 的体积增量只在 `mote_port.o`，不占内核三件套的预算。
 
 ### 2.7 集成编译（CI）
@@ -234,8 +261,9 @@ handler 派发链路完整。整个过程 semihosting 无异常。
 | 并发账目一致性（投递=派发+丢弃，邮箱无滞留，临界区不泄漏） | 交错测试多种子全绿 | 强（**对建模语义**） |
 | 断言路径真实可编译、常规路径不触发断言 | test_moteos_assert 全绿 | 中（无负向触发用例，见局限 5） |
 | 内存安全/无 UB | ASan/UBSan（CI，Ubuntu） | 中（CI 环境，非板级） |
-| 启动链正确（向量表/SysTick/tick→定时器→事件流） | QEMU 冒烟（Cortex-M3） | 中（模拟器，非真硅片） |
-| 三内核可编译、默认配置体积受控 | 交叉编译 + 体积断言（含 tickless 档） | 强 |
+| 启动链正确（向量表/SysTick/tick→定时器→事件流） | QEMU 冒烟（Cortex-M3，固定拍） | 中（模拟器，非真硅片） |
+| tickless 空闲路径（长拍重装/时基追平/无漂移） | QEMU tickless 冒烟（Cortex-M3） | 中（模拟器，非真硅片） |
+| 三内核可编译、体积分账受控（三件套+移植层） | 交叉编译 + 分账体积断言（含 tickless 档） | 强 |
 | 覆盖无大面积盲区 | 行覆盖 92.4%（门槛 85%） | 中 |
 | 无静态分析告警 | cppcheck 0 告警 | 中 |
 
@@ -272,8 +300,8 @@ handler 派发链路完整。整个过程 semihosting 无异常。
 |---|---|
 | host-tests | `-Werror` 构建 + ctest 三目标 + 20/10 种子交错 |
 | sanitizers | ASan/UBSan 构建 + ctest + 5 种子 |
-| cross-compile | M0+(-Os+体积断言)/M3/RV32(-Os+体积断言) + 最坏配置构建 + tickless 档（三架构 `MOTE_TICKLESS=1`）+ STM32F103/CH32V003 真实 SDK 例程编译（钉 SDK 提交，带 tickless 宏） |
-| qemu-smoke | 见第一节第 5 条 |
+| cross-compile | M0+(-Os+分账体积断言)/M3/RV32(-Os+分账体积断言) + 最坏配置构建 + tickless 档（三架构 `MOTE_TICKLESS=1`）+ STM32F103/CH32V003 真实 SDK 例程编译（钉 SDK 提交，带 tickless 宏） |
+| qemu-smoke | 固定拍 + tickless 双档冒烟（见第一节第 5 条） |
 | coverage | gcovr，行覆盖 <85% 判红 |
 | cppcheck | error 即失败 |
 
@@ -305,6 +333,10 @@ arm-none-eabi-gcc -std=c99 -Wall -Wextra -Werror -Os -mcpu=cortex-m3 -mthumb \
 qemu-system-arm -M stm32vldiscovery -cpu cortex-m3 -nographic -monitor none \
   -semihosting-config enable=on,target=native -kernel qemu.elf
 # 期望输出 QEMU_PASS
+
+# QEMU tickless 冒烟（加 -DMOTE_TICKLESS=1 -DMOTE_PORT_HCLK_HZ=24000u，
+# 用 main_tickless.c；期望输出 QEMU_PASS。24000 是时间膨胀值，见第一节
+# 第 5 条；真实主频下 CI 时限内跑不完）
 
 # 静态分析
 cppcheck --enable=warning,performance,portability --std=c99 \

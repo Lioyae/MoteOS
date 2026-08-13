@@ -121,14 +121,26 @@ void mote_note_dropped(uint16_t evt)
     }
 }
 
-mote_status_t mote_event_enqueue(uint16_t evt, void *param)
+/* 入队（调用者须已持有临界区）；满队返回 MOTE_ERR_FULL，不计丢弃、
+ * 不触发钩子。供"暂缓重试"类路径使用：重试最终会送达，途中失败
+ * 不是丢弃，若计入会让 mote_dropped_count() 被假阳性污染 */
+static mote_status_t mote_event_enqueue_raw(uint16_t evt, void *param)
 {
     if (s_q.count >= MOTE_EVT_QUEUE_SIZE) {
-        mote_note_dropped(evt);
         return MOTE_ERR_FULL;
     }
     mote_q_push(evt, param);
     return MOTE_OK;
+}
+
+mote_status_t mote_event_enqueue(uint16_t evt, void *param)
+{
+    mote_status_t st = mote_event_enqueue_raw(evt, param);
+
+    if (st != MOTE_OK) {
+        mote_note_dropped(evt);
+    }
+    return st;
 }
 
 mote_status_t mote_event_post(uint16_t evt, void *param)
@@ -512,9 +524,18 @@ static void mote_process_timers(void)
                 break;
             default:
                 /* RETRY（至少一次）：送达才释放，满队时把 due 后移一拍
-                 * 并重插，下一拍重试（避免同 poll 内反复投递死循环） */
-                if (mote_event_post(t->evt, t->param) == MOTE_OK) {
-                    break;
+                 * 并重插，下一拍重试（避免同 poll 内反复投递死循环）。
+                 * 重试路径用 raw 入队：失败只是暂缓、事件最终仍送达，
+                 * 不计丢弃数、不触发丢事件钩子（否则"最终送达的事件"
+                 * 会被误记为丢弃，掉计数口径污染可靠性监测） */
+                {
+                    mote_crit_state_t tcs = mote_crit_enter();
+                    mote_status_t tst = mote_event_enqueue_raw(t->evt, t->param);
+
+                    mote_crit_exit(tcs);
+                    if (tst == MOTE_OK) {
+                        break;
+                    }
                 }
                 t->due = now + 1;
                 mote_timer_insert_sorted(t);

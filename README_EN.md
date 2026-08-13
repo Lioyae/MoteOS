@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>An event-driven cooperative kernel for tiny MCUs</strong><br>
-  No assembly · No dynamic memory allocation · Resource usage fixed at compile time
+  No standalone assembly files (inline asm for critical sections/sleep) · No dynamic memory allocation · Resource usage fixed at compile time
 </p>
 
 <p align="center">
@@ -64,8 +64,9 @@ MoteOS is a C99 event-driven cooperative kernel for small MCUs (2KB RAM / 16KB F
 
 | Item | Usage |
 |---|---|
-| Kernel Flash | RV32 ~2.7KB, Cortex-M0+ ~2.2KB (CI cross-compiles the three kernel .o at -Os; asserts RV32 <2.75KB, M0+ <2.5KB) |
-| Kernel RAM | ~280B with default config (event queue 16 slots + delayed 4 + task slots 4); CI asserts <512B |
+| Kernel Flash (core trio) | RV32 ~2.7KB, Cortex-M0+ ~2.2KB (CI cross-compiles mote.o/mote_task.o/mote_mail.o at -Os; asserts RV32 <2.75KB, M0+ <2.5KB) |
+| Port layer Flash | mote_port.o <512B fixed-tick (CI asserts separately); tickless adds ~320-360B (port layer only) |
+| Kernel RAM | ~280B with default config (event queue 16 slots + delayed 4 + task slots 4); CI asserts <512B (including port layer statics) |
 | Full blink example | Manually measured on CH32V003: FLASH 2.7KB / RAM 712B (including startup and stack; **example size is not CI-asserted**). Note: 712B is 35% of a 2KB RAM — the rest must cover app data and stack |
 
 ## Modules

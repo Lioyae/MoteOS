@@ -75,7 +75,10 @@ typedef enum {
 void mote_init(const mote_evt_entry_t *evt_table, uint16_t evt_count);
 /* 契约：仅允许启动时调用一次（不重置丢事件钩子与测试注入点） */
 
-/* 因队列满/事件无效而被丢弃的事件总数（用于可靠性监测） */
+/* 因队列满/事件无效而被实际丢弃的事件总数（用于可靠性监测）。
+ * 注意口径：单次 RETRY 定时器满队时的暂缓重试不计入——事件最终
+ * 仍送达，不是丢弃；周期定时器满队丢当次、DROP 策略失败即弃等
+ * 真实丢失才计数。 */
 uint32_t mote_dropped_count(void);
 
 /* 丢事件钩子：每丢弃一次事件回调一次。
@@ -98,8 +101,10 @@ void mote_loop(void);
 
 /* 由移植层提供：进低功耗。入参为内核已知的下一到期节拍（见 mote_next_due），
  * MOTE_TICK_NONE 表示无待到期项（可长睡到任意中断）。
- * 契约：内核在关中断状态下调用本函数（临界区内），实现必须极短
- * （wfi 级别）；pending 中断会唤醒 CPU，唤醒后内核先恢复中断。
+ * 契约：内核在关中断状态下调用本函数（临界区内）。
+ * 固定拍实现应仅为一条 wfi；tickless 实现为编译期常量乘加、
+ * 寄存器写与 wfi（无运行时 64 位除法，见 port/mote_port.c），
+ * 均应在数十周期量级。pending 中断会唤醒 CPU，唤醒后内核先恢复中断。
  * tickless 移植（MOTE_TICKLESS=1）应：先追平提前唤醒已流逝的时基、
  * 再按 next_due 重装 SysTick、最后 wfi——参考 port/mote_port.c 的
  * 参考实现。深度睡眠（STOP/STANDBY 等会停掉 tick 时钟的模式）不支持，

@@ -170,11 +170,14 @@ static void test_one_shot_survives_full_queue(void)
     for (int i = 0; i < MOTE_EVT_QUEUE_SIZE; i++) {
         TEST_ASSERT(mote_poll() == true);
     }
+    /* 口径回归：RETRY 暂缓重试不计丢弃（事件最终送达，不是丢失） */
+    TEST_ASSERT(mote_dropped_count() == 0);
     /* 队列空了，但 RETRY 重试发生在下一拍 */
     TEST_ASSERT(mote_poll() == false);
     mote_tick();
     TEST_ASSERT(mote_poll() == true);
     TEST_ASSERT(s_last_param == 7);
+    TEST_ASSERT(mote_dropped_count() == 0);
     TEST_ASSERT(mote_poll() == false); /* 单次定时器已释放 */
 }
 

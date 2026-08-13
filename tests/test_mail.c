@@ -126,6 +126,54 @@ static void test_send_rollback_on_queue_full(void)
     TEST_ASSERT(s_recv_buf[0] == 0x55);
 }
 
+/* 钩子重入同一邮箱：丢弃钩子在 mote_note_dropped 内（临界区中）向触发
+ * 本次丢弃的同一个邮箱再发送。先入队后入箱的实现下，钩子观察到的邮箱
+ * 状态必须自洽：外层失败不残留数据、钩子的发送结果与邮箱计数一致 */
+static uint16_t s_hook_evt;
+static uint32_t s_hook_attempts;
+static mote_status_t s_hook_st;
+
+static void reenter_mail_hook(uint16_t evt)
+{
+    uint8_t d = 0xAA;
+
+    s_hook_evt = evt;
+    s_hook_attempts++;
+    s_hook_st = mote_mail_send(&mb, &d, 1);
+}
+
+static void test_hook_reenter_same_mailbox(void)
+{
+    uint8_t data = 0x55;
+    static uint8_t buf[MB_SIZE];
+
+    mote_init(table, 2);
+    s_hook_attempts = 0;
+    s_hook_st = MOTE_OK;
+    for (int i = 0; i < MOTE_EVT_QUEUE_SIZE; i++) {
+        TEST_ASSERT(mote_event_post(1, MOTE_P(i)) == MOTE_OK);
+    }
+    mote_set_drop_hook(reenter_mail_hook);
+    /* 队列满 → 外层 send 失败 → 钩子重入同邮箱 → 队列仍满 → 钩子也失败；
+     * 但邮箱不得因两次失败残留任何数据、计数不得被吞 */
+    TEST_ASSERT(mote_mail_send(&mb, &data, 1) == MOTE_ERR_FULL);
+    TEST_ASSERT(s_hook_attempts == 1);
+    TEST_ASSERT(s_hook_evt == 0);
+    TEST_ASSERT(s_hook_st == MOTE_ERR_FULL); /* 钩子看到的是满队列，一致 */
+    TEST_ASSERT(mote_mail_recv(&mb, buf) == -1); /* 无残留 */
+    mote_set_drop_hook(NULL);
+
+    /* 排空队列后，邮箱应完好可用：入箱/出箱往返正常 */
+    for (int i = 0; i < MOTE_EVT_QUEUE_SIZE; i++) {
+        TEST_ASSERT(mote_poll() == true);
+    }
+    s_recv_len = -1;
+    TEST_ASSERT(mote_mail_send(&mb, &data, 1) == MOTE_OK);
+    TEST_ASSERT(mote_poll() == true);
+    TEST_ASSERT(s_recv_len == 1);
+    TEST_ASSERT(s_recv_buf[0] == 0x55);
+}
+
 static void test_invalid_mailbox_rejected(void)
 {
     static uint8_t buf[8];
@@ -173,5 +221,6 @@ void suite_mail(void)
     test_send_variable_len_roundtrip();
     test_send_oversize_rejected();
     test_send_rollback_on_queue_full();
+    test_hook_reenter_same_mailbox();
     test_invalid_mailbox_rejected();
 }

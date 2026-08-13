@@ -69,11 +69,14 @@ jobs:
           arm-none-eabi-gcc -std=c99 -Wall -Wextra -Werror -Os -mcpu=cortex-m0plus -mthumb \
             -c moteos/mote.c moteos/mote_task.c moteos/mote_mail.c moteos/port/mote_port.c \
             -Imoteos -Imoteos/port/cm0plus -Itests/stubs
-          arm-none-eabi-size -t mote.o mote_task.o mote_mail.o
-          TEXT=$(arm-none-eabi-size -t mote.o mote_task.o mote_mail.o | tail -1 | awk '{print $1}')
-          RAM=$(arm-none-eabi-size -t mote.o mote_task.o mote_mail.o | tail -1 | awk '{print $2+$3}')
-          echo "m0plus kernel: text=${TEXT}B ram=${RAM}B"
-          test "$TEXT" -lt 2560 || { echo "kernel text too large"; exit 1; }
+          arm-none-eabi-size -t mote.o mote_task.o mote_mail.o mote_port.o
+          # 内核三件套与移植层分账断言：移植层（SysTick/临界区/idle）单独设限
+          TEXT_K=$(arm-none-eabi-size -t mote.o mote_task.o mote_mail.o | tail -1 | awk '{print $1}')
+          TEXT_P=$(arm-none-eabi-size mote_port.o | tail -1 | awk '{print $1}')
+          RAM=$(arm-none-eabi-size -t mote.o mote_task.o mote_mail.o mote_port.o | tail -1 | awk '{print $2+$3}')
+          echo "m0plus kernel: text=${TEXT_K}B port=${TEXT_P}B ram=${RAM}B"
+          test "$TEXT_K" -lt 2560 || { echo "kernel text too large"; exit 1; }
+          test "$TEXT_P" -lt 512 || { echo "port text too large"; exit 1; }
           test "$RAM" -lt 512 || { echo "kernel ram too large"; exit 1; }
           rm -f *.o
 
@@ -115,11 +118,14 @@ jobs:
           riscv-none-elf-gcc -std=c99 -Wall -Wextra -Werror -Os -march=rv32imc_zicsr -mabi=ilp32 \
             -c moteos/mote.c moteos/mote_task.c moteos/mote_mail.c moteos/port/mote_port.c \
             -Imoteos -Imoteos/port/ch32v -Itests/stubs
-          riscv-none-elf-size -t mote.o mote_task.o mote_mail.o
-          TEXT=$(riscv-none-elf-size -t mote.o mote_task.o mote_mail.o | tail -1 | awk '{print $1}')
-          RAM=$(riscv-none-elf-size -t mote.o mote_task.o mote_mail.o | tail -1 | awk '{print $2+$3}')
-          echo "rv32 kernel: text=${TEXT}B ram=${RAM}B"
-          test "$TEXT" -lt 2816 || { echo "kernel text too large"; exit 1; }
+          riscv-none-elf-size -t mote.o mote_task.o mote_mail.o mote_port.o
+          # 内核三件套与移植层分账断言（移植层含 SysTick/临界区/idle）
+          TEXT_K=$(riscv-none-elf-size -t mote.o mote_task.o mote_mail.o | tail -1 | awk '{print $1}')
+          TEXT_P=$(riscv-none-elf-size mote_port.o | tail -1 | awk '{print $1}')
+          RAM=$(riscv-none-elf-size -t mote.o mote_task.o mote_mail.o mote_port.o | tail -1 | awk '{print $2+$3}')
+          echo "rv32 kernel: text=${TEXT_K}B port=${TEXT_P}B ram=${RAM}B"
+          test "$TEXT_K" -lt 2816 || { echo "kernel text too large"; exit 1; }
+          test "$TEXT_P" -lt 512 || { echo "port text too large"; exit 1; }
           test "$RAM" -lt 512 || { echo "kernel ram too large"; exit 1; }
           rm -f *.o
 
@@ -207,6 +213,32 @@ jobs:
             -kernel /tmp/moteos_qemu.elf 2>&1 | tee /tmp/qemu.log
           grep -q "QEMU_PASS" /tmp/qemu.log || { echo "smoke test failed"; exit 1; }
           ! grep -q "QEMU_FAIL" /tmp/qemu.log || { echo "smoke test reported failure"; exit 1; }
+
+      - name: Build smoke test (Cortex-M3, tickless: accounting + long-nap flow)
+        run: |
+          # HCLK 用 24kHz 时间膨胀：QEMU 的 WFI 模型在重装 SysTick 后产生
+          # 伪唤醒、深睡退化为轮询，真实 24MHz 换算下 3000 拍无法在 CI 时限
+          # 内完成；膨胀后 1 tick-ms=24 计数器周期，入账数学与换算率无关
+          arm-none-eabi-gcc -std=c99 -Wall -Wextra -Werror -Os -mcpu=cortex-m3 -mthumb \
+            -ffreestanding -nostdlib -T tests/qemu/cm3/link.ld \
+            -DMOTE_TICKLESS=1 -DMOTE_PORT_HCLK_HZ=24000u \
+            -o /tmp/moteos_qemu_tickless.elf \
+            tests/qemu/cm3/main_tickless.c tests/qemu/cm3/startup.c \
+            moteos/mote.c moteos/mote_task.c moteos/mote_mail.c moteos/port/mote_port.c \
+            -Imoteos -Imoteos/port/cm3
+
+      - name: Run tickless in QEMU (accounting, segmented naps, drift check)
+        run: |
+          # tickless 空闲路径（入账/rem==0 窗口/nap 钳制/固定拍恢复）仅在
+          # 此冒烟被编译与执行；1000ms 周期定时器 3 拍后 ticks 须落在
+          # [3000, 4000]：下界抓入账跑快（双重入账），上界为 QEMU SysTick
+          # ptimer 重载滞后（TCG 批内事件不处理）留的仿真余量
+          timeout 60s qemu-system-arm -M stm32vldiscovery -cpu cortex-m3 \
+            -nographic -monitor none \
+            -semihosting-config enable=on,target=native \
+            -kernel /tmp/moteos_qemu_tickless.elf 2>&1 | tee /tmp/qemu_tickless.log
+          grep -q "QEMU_PASS" /tmp/qemu_tickless.log || { echo "tickless smoke failed"; exit 1; }
+          ! grep -q "QEMU_FAIL" /tmp/qemu_tickless.log || { echo "tickless smoke reported failure"; exit 1; }
 
   coverage:
     runs-on: ubuntu-latest

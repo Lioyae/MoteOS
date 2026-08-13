@@ -67,25 +67,30 @@ mote_status_t mote_mail_send(mote_mail_t *mb, const void *data, uint16_t len)
     MOTE_TEST_INJECT(); /* 交错测试窗口：入临界区前伪中断可插入 */
 
     /* 入箱与事件入队必须在同一个临界区内完成：
-     * 中断不可能插进拷贝与入队之间，回滚也是原子的，
-     * 杜绝"数据已入箱但事件没送达"与"回滚挤掉他人数据"两类竞态 */
+     * 中断不可能插进拷贝与入队之间。
+     * 顺序为"先入队、后入箱"：入队失败时邮箱未动、无需回滚，
+     * 消除了"count 已递增、回滚未发生"的中间状态。旧顺序（先入箱
+     * 后入队）下，丢事件钩子在 mote_note_dropped 内重入本函数向同一
+     * 邮箱发送时，外层回滚会吞掉内层消息的计数。先入队后，钩子在
+     * 任何时刻看到的邮箱状态都是自洽的。
+     * 事件先于数据入队无可观测窗口：本临界区内中断关闭、主循环
+     * 不可能并发消费队列；出临界区前数据必已就位（全有或全无） */
     cs = mote_crit_enter();
     if (mb->count >= mb->slots) {
         mote_note_dropped(mb->evt); /* 口径统一：被拒绝的入箱也计入 */
         st = MOTE_ERR_FULL;
     } else {
-        unsigned idx = (unsigned)mb->head + mb->count;
-
-        MOTE_ASSERT(mb->count < mb->slots);
-        if (idx >= mb->slots) {
-            idx -= mb->slots; /* head+count < 2*slots，一次减法足够 */
-        }
-        mote_copy(&mb->buf[idx * mb->item_size], data, len);
-        mb->lens[idx] = (uint8_t)len;
-        mb->count++;
         st = mote_event_enqueue(mb->evt, (void *)mb);
-        if (st != MOTE_OK) {
-            mb->count--; /* 同一临界区内回滚：全有或全无 */
+        if (st == MOTE_OK) {
+            unsigned idx = (unsigned)mb->head + mb->count;
+
+            MOTE_ASSERT(mb->count < mb->slots);
+            if (idx >= mb->slots) {
+                idx -= mb->slots; /* head+count < 2*slots，一次减法足够 */
+            }
+            mote_copy(&mb->buf[idx * mb->item_size], data, len);
+            mb->lens[idx] = (uint8_t)len;
+            mb->count++;
         }
     }
     mote_crit_exit(cs);

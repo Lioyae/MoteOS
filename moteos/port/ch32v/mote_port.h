@@ -10,7 +10,14 @@
 
 /* WCH RISC-V（CH32V003/V007/V203/V307 等，WCH SPL）
  *
- * 必须包含器件头文件 ch32v00x.h：IRQn_Type 在其中定义，
+ * 器件头选择：默认 V2 代（CH32V003/V007）的 ch32v00x.h；
+ * V3 代（CH32V203/V307）在工程宏定义里覆盖：
+ *   -DMOTE_CH32_HAL_HEADER=<ch32v20x.h>   （V3 中型）
+ *   -DMOTE_CH32_HAL_HEADER=<ch32v30x.h>   （V3 大型）
+ * 各代 SDK 的器件头都在定义 IRQn_Type 之后才包含 core_riscv.h，
+ * 因此换头后 __enable_irq/__disable_irq/SysTick 布局均可用。
+ *
+ * 必须包含器件头文件：IRQn_Type 在其中定义，
  * 且它在定义 IRQn_Type 之后才包含 core_riscv.h。
  * 直接包含 core_riscv.h 会因 IRQn_Type 未定义而编译失败。
  *
@@ -19,7 +26,14 @@
  *   __disable_irq = 写 0x6000（bit7=0 中断关闭）
  * 完整保存恢复该寄存器，支持嵌套、不破坏调用方状态 */
 
-#include "ch32v00x.h"
+#ifndef MOTE_CH32_HAL_HEADER
+#define MOTE_CH32_HAL_HEADER <ch32v00x.h>
+#endif
+#include MOTE_CH32_HAL_HEADER
+
+/* 体系标签：mote_port.c 的 tickless 实现据此选择青稞 SysTick
+ * 访问方式（64 位比较寄存器、向上计数） */
+#define MOTE_PORT_CH32 1
 
 /* 青稞中断系统控制寄存器（INTSYSCR）的 CSR 编号。
  * ⚠ 同一 port 头文件服务 V2 代（CH32V003/V007）与 V3 代（CH32V203/V307），
