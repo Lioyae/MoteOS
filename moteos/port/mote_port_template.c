@@ -17,7 +17,10 @@
  *    ARM/RISC-V 内核一条 wfi 即可；其他架构换成对应指令。
  *    next_due 为内核已知的下一到期节拍（MOTE_TICK_NONE = 无到期项），
  *    需要 tickless（按 deadline 重装 tick 定时器）时参考
- *    port/mote_port.c 的 MOTE_TICKLESS 参考实现；固定拍移植可忽略。
+ *    port/mote_port.c 的 MOTE_TICKLESS 参考实现与 docs/porting.md 4.3
+ *    的入账协议（要点：以"重装值 - 计数器剩余"入账已流逝时间，
+ *    不要回读计数器做入账锚点——写 VAL=0 后存在 0 窗口，会下溢）；
+ *    固定拍移植可忽略。
  *
  * 3) 提供临界区 API（保存/恢复式，支持嵌套）：
  *      mote_crit_state_t  中断状态类型

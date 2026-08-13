@@ -505,7 +505,7 @@ tick 变成 10ms 一拍，`SysTick_Config(SystemCoreClock / (1000 / MOTE_TICK_MS
 ## 第 7 章：移植成功检查清单
 
 - [ ] 编译 0 error 0 warning（开 `-Wall -Wextra -Werror`，与 CI 同口径）
-- [ ] 内核体积核对：map 文件里内核 text <2.75KB（RV32）/ <2.5KB（M0+）、RAM <512B（实测 RV32 2.7KB / M0+ 2.2KB / RAM 280B，见 README）
+- [ ] 内核体积核对：map 文件里内核三件套 text <2.75KB（RV32）/ <2.5KB（M0+）、移植层 port text <512B、RAM <512B（本机实测 M0+ 三件套 2297B / port 14B / RAM 280B，见 README 与 docs/test.md）
 - [ ] map 文件里 `SysTick_Handler` 只出现一次（在 mote_port.o 里）
 - [ ] LED 闪烁周期用逻辑分析仪/示波器实测 ≈ 设定值
 - [ ] **中断延迟实测**：DWT CYCCNT 或 GPIO 示波器测 `mote_mail_send` 最坏路径（方法见使用教程附录 A），确认符合你的延迟预算

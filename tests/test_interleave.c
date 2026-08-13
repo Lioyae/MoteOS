@@ -17,7 +17,7 @@
  * 回调注入点，实现更细粒度的交错。
  * 注入窗口覆盖（详见 mote.h 测试注入注释）：
  *   mote_event_post / post_replace / post_delayed、
- *   mote_mail_send（入临界区前，覆盖入箱回滚路径的竞态）、
+ *   mote_mail_send（入临界区前，覆盖先入队后入箱顺序与失败原子性的竞态）、
  *   mote_poll（单步前）、mote_process_timers（定时器列表遍历中）。
  * 验证内核并发语义的一致性：每次投递尝试（含定时器触发的内部投递）
  * 要么最终被派发、要么被计数丢弃；邮箱无滞留；临界区不泄漏。

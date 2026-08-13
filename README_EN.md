@@ -64,7 +64,7 @@ MoteOS is a C99 event-driven cooperative kernel for small MCUs (2KB RAM / 16KB F
 
 | Item | Usage |
 |---|---|
-| Kernel Flash (core trio) | RV32 ~2.7KB, Cortex-M0+ ~2.2KB (CI cross-compiles mote.o/mote_task.o/mote_mail.o at -Os; asserts RV32 <2.75KB, M0+ <2.5KB) |
+| Kernel Flash (core trio) | Cortex-M0+ measured 2297B, RV32 per CI (cross-compiles mote.o/mote_task.o/mote_mail.o at -Os; asserts M0+ <2.5KB, RV32 <2.75KB) |
 | Port layer Flash | mote_port.o <512B fixed-tick (CI asserts separately); tickless adds ~320-360B (port layer only) |
 | Kernel RAM | ~280B with default config (event queue 16 slots + delayed 4 + task slots 4); CI asserts <512B (including port layer statics) |
 | Full blink example | Manually measured on CH32V003: FLASH 2.7KB / RAM 712B (including startup and stack; **example size is not CI-asserted**). Note: 712B is 35% of a 2KB RAM — the rest must cover app data and stack |
@@ -75,7 +75,7 @@ MoteOS is a C99 event-driven cooperative kernel for small MCUs (2KB RAM / 16KB F
 |---|---|---|
 | Event queue | `mote_event_post` / `mote_event_post_replace` (latest wins per ID) / `mote_event_post_delayed` (with `_replace` and `mote_event_cancel_delayed`); drop counter `mote_dropped_count()` |
 | Dispatch table | C99 designated initializers; event ID is the index; O(1) dispatch; table lives in Flash |
-| Timers | Statically defined; 32-bit wraparound safe; list sorted by due time so expiry scanning only visits due nodes (idle poll is O(1)); periodic timers fire on absolute phase (missed ticks coalesce, no cumulative drift); selectable full-queue policy: retry / drop (strict deadline) / latest (replace semantics) — note: **periodic timers drop the beat on a full queue and proceed next beat; one-shot RETRY timers retry on the next tick until delivered** |
+| Timers | Statically defined; 32-bit wraparound safe; list sorted by due time so expiry scanning only visits due nodes (idle poll is O(1)); periodic timers fire on absolute phase (missed ticks coalesce, no cumulative drift); selectable full-queue policy: retry / drop (strict deadline) / latest (replace semantics) — note: **periodic timers drop the beat on a full queue and proceed next beat; one-shot RETRY timers retry on the next tick until delivered (retries do not count as drops or fire the drop hook)** |
 | Task layer | Periodic-callback convenience layer: descriptors in Flash (handler + ctx + period), state slot pool in RAM; inactive tasks consume no RAM (optional). Note: **not RTOS tasks** — no preemption, handlers are called synchronously by the main loop, unrelated to the event queue |
 | Mailbox | Static slots with deep copy; slot insert and event enqueue are atomic within one critical section (all-or-nothing, no race window); variable-length items (1..item_size bytes per slot with item_size≤255, `recv` returns the actual stored length, oversize sends are rejected — never truncated, +1 byte length overhead per slot); invalid constructions (slots==0, NULL buffers, etc.) are rejected at runtime (optional) |
 | Low power | Deadline-aware: `mote_next_due()` exposes the next expiry; the kernel sleeps (into `mote_idle(next_due)`) only when the queue is empty and nothing is due; optional **tickless** idle (`MOTE_TICKLESS=1`) reloads SysTick to the next deadline before wfi and restores the fixed rate on wake. Race handling is correct by reasoning, but **WFI behavior on each chip (especially QingKe) is not board-verified** |

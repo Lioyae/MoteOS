@@ -36,7 +36,7 @@
 | `suite_queue` | post/派发、满队报错、replace 覆盖、越界 ID 安全丢弃、空 handler、丢弃计数、drop hook（含重入）、临界区嵌套 |
 | `suite_timer` | 单次/周期、handler 内自停、restart、tick 回绕、延时投递（含 replace/cancel）、满队三策略（RETRY/DROP/LATEST）、**相位稳定无漂移**、**ms 边界运行时校验**、**policy 越界运行时校验**、**排序链表触发顺序/重排**、**`mote_next_due` deadline 计算**、**`mote_sleep` 睡眠判定（宿主机 idle 观测）** |
 | `suite_task` | 周期触发、停止、槽池（随配置伸缩）、ctx 透传、**相位无漂移**、**period_ms 边界校验** |
-| `suite_mail` | 收发往返、满箱、空箱、超长拒绝、**满队整体回滚**（全有或全无）、**非法构造（slots==0/空指针/item_size 越界）运行时拒绝** |
+| `suite_mail` | 收发往返、满箱、空箱、超长拒绝、**满队整体失败不滞留**（先入队后入箱，全有或全无）、**钩子重入同一邮箱**、**非法构造（slots==0/空指针/item_size 越界）运行时拒绝** |
 | `suite_interleave` | 见下节 |
 
 ### 2. 交错测试（`tests/test_interleave.c`）
@@ -51,7 +51,7 @@
 |---|---|---|
 | `mote_event_post` / `post_replace` | 临界区前后 | 入队与队列操作的交错 |
 | `mote_event_post_delayed` | 投递路径 | 延时槽池竞争 |
-| `mote_mail_send` | 入临界区前 | **入箱+入队+回滚路径**的竞态 |
+| `mote_mail_send` | 入临界区前 | **先入队后入箱**顺序与失败原子性的竞态 |
 | `mote_poll` | 单步前 | 派发与投递的交错 |
 | `mote_process_timers` | 定时器列表遍历中 | 定时器派发与投递的交错 |
 
@@ -154,9 +154,9 @@ cppcheck --enable=warning,performance,portability --std=c99 \
 
 | 构建 | 断言数 | 失败 | 结果 |
 |---|---|---|---|
-| `test_moteos`（默认配置） | 4798 | 0 | ALL PASSED |
-| `test_moteos_assert`（断言开启） | 4798 | 0 | ALL PASSED（全程未触发任何内核断言） |
-| `test_moteos_max`（队列 255 等最坏配置） | 7929 | 0 | ALL PASSED |
+| `test_moteos`（默认配置） | 4841 | 0 | ALL PASSED |
+| `test_moteos_assert`（断言开启） | 4841 | 0 | ALL PASSED（全程未触发任何内核断言） |
+| `test_moteos_max`（队列 255 等最坏配置） | 8450 | 0 | ALL PASSED |
 
 ### 2.2 交错测试多种子
 
@@ -174,22 +174,22 @@ cppcheck --enable=warning,performance,portability --std=c99 \
 ### 2.3 覆盖率（gcovr，`--coverage -O0`，三目标全跑）
 
 ```
-moteos/mote.c               494 行  456 覆盖   92%   （未覆盖：MOTE_DELAYED_MAX=0 分支、
+moteos/mote.c               308 行  288 覆盖   93%   （未覆盖：MOTE_DELAYED_MAX=0 分支、
                                                         tick 回绕保护路径等）
-moteos/mote_mail.c           87 行   82 覆盖   94%   （未覆盖：参数校验分支）
+moteos/mote_mail.c           62 行   59 覆盖   95%   （未覆盖：参数校验分支）
 moteos/mote_task.c           41 行   39 覆盖   95%
-moteos/port/host/mote_port.h 17 行   17 覆盖  100%
-moteos/port/mote_port.c       8 行    4 覆盖   50%   ← 仅宿主分支参与 gcovr；目标机分支
+moteos/port/host/mote_port.h  9 行    9 覆盖  100%
+moteos/port/mote_port.c       6 行    4 覆盖   66%   ← 仅宿主分支参与 gcovr；目标机分支
                                                       （SysTick/tickless/wfi）由交叉编译
                                                       + QEMU 冒烟覆盖（tickless 档实际
                                                       执行 tickless 空闲路径）
-TOTAL                       647 行  598 覆盖   92.4%
+TOTAL                       426 行  399 覆盖   93.7%
 ```
 
 ```
-lines:     92.4% (598/647)    ← CI 门槛 85%
-functions: 92.8% (64/69)
-branches:  82.1% (335/408)
+lines:     93.7% (399/426)   ← CI 门槛 85%
+functions: 95.6% (43/45)
+branches:  83.8% (218/260)
 ```
 
 > gcovr 8.x 对多目标合并更严格（断言构建的 -include 会平移行号），
@@ -226,16 +226,16 @@ handler 派发链路完整。tickless 档另验证（时间膨胀，1 tick-ms = 
 
 | 目标 | 配置 | text | data+bss | 断言 |
 |---|---|---|---|---|
-| Cortex-M0+ | 默认，`-Os` | 内核 2238 B + port.o <512 B | 280 B | CI：内核 text <2560、port text <512、RAM <512 ✅ |
-| Cortex-M0+ | 队列 255 / 延时 16，`-Os` | 2262 B | 2384 B | 仅编译（最坏配置体积仅记录） |
-| Cortex-M3 | 默认，无 `-Os` | 4469 B | 280 B | 仅编译 ✅ |
-| RV32IMC（青稞） | 默认，`-Os` | 内核 2740 B + port.o <512 B | 280 B | CI：内核 text <2816、port text <512、RAM <512 ✅ |
+| Cortex-M0+ | 默认，`-Os` | 内核三件套 2297 B + port.o 14 B | 280 B | CI：内核 text <2560、port text <512、RAM <512 ✅ |
+| Cortex-M0+ | 队列 255 / 延时 16，`-Os` | 仅记录 | 2384 B | 仅编译（最坏配置体积仅记录） |
+| Cortex-M3 | 默认，无 `-Os` | 仅记录 | 280 B | 仅编译 ✅ |
+| RV32IMC（青稞） | 默认，`-Os` | 内核 text <2816（本机无 RV32 工具链，数字以 CI 为准） | 280 B | CI：内核 text <2816、port text <512、RAM <512 ✅ |
 | Cortex-M0+/M3/RV32 | `MOTE_TICKLESS=1`（port.o 增量） | +320~360 B（仅 port 层） | +12 B | 编译 + QEMU tickless 冒烟（M3） ✅ |
 
 > 体积断言为**分账口径**：内核三件套（mote.o/mote_task.o/mote_mail.o）
 > 与移植层 mote_port.o（SysTick/临界区/idle）分别设限，移植层不再游离
-> 在断言之外。M0+/M3/RV32 数字为本地实测（RV32 用 WCH gcc 15.2 与 CI 的
-> xpack gcc 15.2 结果一致）。队列 255 配置的 RAM 2.3KB 是用户把队列开到
+> 在断言之外。M0+ 数字为本机实测（评审整改后三件套 2297 B，含 RETRY
+> raw 入队等新增路径）。队列 255 配置的 RAM 2.3KB 是用户把队列开到
 > 极限的代价——内核本身不失控，但 `mote_event_post_replace` 的临界区
 > 时长也随队列长度线性增长（见 usage.md 附录 A 延迟预算）。
 > tickless 的体积增量只在 `mote_port.o`，不占内核三件套的预算。
@@ -254,7 +254,7 @@ handler 派发链路完整。tickless 档另验证（时间膨胀，1 tick-ms = 
 
 | 宣称 | 证据 | 强度 |
 |---|---|---|
-| API 语义正确（队列/定时器/任务/邮箱） | 4798~7929 条断言全绿 | 强 |
+| API 语义正确（队列/定时器/任务/邮箱） | 4841~8450 条断言全绿 | 强 |
 | 周期定时器/任务无相位漂移 | 漂移回归测试（含迟到触发场景） | 强（逻辑层面） |
 | ms/period/policy 边界运行时校验生效 | test_ms_bound / test_task_ms_bound / test_policy_invalid | 强 |
 | deadline 计算与睡眠判定（next_due/sleep） | test_next_due / test_sleep_deadline | 强（逻辑层面） |
