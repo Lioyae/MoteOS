@@ -113,6 +113,7 @@ int main(void)
 
 - [Porting guide](docs/porting.md) (Chinese): Keil / MounRiver integration, SysTick conflicts, non-CMSIS chips, checklist
 - [Usage guide](docs/usage.md) (Chinese): glossary, line-by-line walkthrough of events / timers / mailboxes / tasks, full example project
+- [Test documentation](docs/test.md) (Chinese): test matrix, interleave test design, QEMU smoke, coverage & static analysis, local run instructions
 
 ## Rules
 
