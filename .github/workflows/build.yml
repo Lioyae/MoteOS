@@ -214,7 +214,7 @@ jobs:
           grep -q "QEMU_PASS" /tmp/qemu.log || { echo "smoke test failed"; exit 1; }
           ! grep -q "QEMU_FAIL" /tmp/qemu.log || { echo "smoke test reported failure"; exit 1; }
 
-      - name: Build smoke test (Cortex-M3, tickless: accounting + long-nap flow)
+      - name: Build smoke test (Cortex-M3, tickless accounting + long-nap flow)
         run: |
           # HCLK 用 24kHz 时间膨胀：QEMU 的 WFI 模型在重装 SysTick 后产生
           # 伪唤醒、深睡退化为轮询，真实 24MHz 换算下 3000 拍无法在 CI 时限
