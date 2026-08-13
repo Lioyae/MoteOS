@@ -1,8 +1,8 @@
 # MoteOS 测试文档
 
-> 本文汇总 MoteOS 的全部验证手段、当前结果与已知局限。
-> 一句话结论：**逻辑正确性有相当厚的自动化验证，硬件行为没有板级数据。**
+> 本文汇总 MoteOS 的全部验证手段、**实测结果明细**与结论。
 > 测试代码在 `tests/`，CI 定义在 `.github/workflows/build.yml`。
+> 所有数字均来自 2026-08-13 的实际运行，非估计值。
 
 ---
 
@@ -23,7 +23,9 @@
 
 ---
 
-## 1. 宿主机单元测试（`tests/test_*.c`）
+## 一、各测试手段说明
+
+### 1. 宿主机单元测试（`tests/test_*.c`）
 
 内核是纯逻辑，全部在 PC 上跑（`moteos/port/host` 用共享变量模拟中断开关，
 临界区是否破坏调用方中断状态可在宿主机直接断言）。
@@ -36,16 +38,7 @@
 | `suite_mail` | 收发往返、满箱、空箱、截断、**满队整体回滚**（全有或全无） |
 | `suite_interleave` | 见下节 |
 
-当前断言规模（本地实测，2026-08-13）：
-
-```
-test_moteos     （默认配置）       4524 asserts, 0 failures
-test_moteos_max（队列 255 最坏配置）7643 asserts, 0 failures
-```
-
----
-
-## 2. 交错测试（`tests/test_interleave.c`）
+### 2. 交错测试（`tests/test_interleave.c`）
 
 **设计**：单线程内用伪随机序列交错执行"主循环操作"与"伪中断操作"。
 伪中断遵守建模硬件规则——临界区内不执行；同时模拟 tick 中断
@@ -72,16 +65,12 @@ test_moteos_max（队列 255 最坏配置）7643 asserts, 0 failures
 ```
 
 **种子**：默认固定种子；环境变量 `MOTE_TEST_SEED` 可换轨迹。
-CI 跑 20 个种子（常规构建）+ 10 个（最坏配置构建）+ 5 个（ASan）；
-本地验证跑过 1~50 全绿。
 
 **局限声明（重要）**：交错测试验证的是内核对**测试自行定义的建模语义**
 （"临界区内 ISR 不执行"是测试假设的硬件行为）的一致性。它能证明
 "内核符合我假设的模型"，证明不了"内核符合真实硬件"——后者需要板级验证。
 
----
-
-## 3. 断言开启构建（`test_moteos_assert`）
+### 3. 断言开启构建（`test_moteos_assert`）
 
 `mote_config.h` 里 `MOTE_ASSERT` 默认为 `((void)0)`——断言路径**从不参与编译**。
 该目标强制 `-include tests/mote_assert.h`（在 `mote_config.h` 之前生效），
@@ -90,11 +79,7 @@ CI 跑 20 个种子（常规构建）+ 10 个（最坏配置构建）+ 5 个（A
 - 内核所有断言路径被真实编译进测试二进制并运行
 - 测试全程触发任何断言 → 立即失败（CTest 报红）
 
-当前全部测试在断言开启下不触发任何断言。
-
----
-
-## 4. 最坏配置构建（`test_moteos_max`）
+### 4. 最坏配置构建（`test_moteos_max`）
 
 ```
 MOTE_EVT_QUEUE_SIZE = 255   （replace 全扫描的最长路径）
@@ -105,9 +90,7 @@ MOTE_TASK_SLOT_MAX  = 16
 跑全套单元测试 + 交错测试（多种子）。同时交叉编译 job 增加
 `-DMOTE_EVT_QUEUE_SIZE=255` 的 M0+/RV32 构建，验证极端配置仍能编译。
 
----
-
-## 5. QEMU 冒烟测试（`tests/qemu/cm3/`）
+### 5. QEMU 冒烟测试（`tests/qemu/cm3/`）
 
 比交叉编译多一层：真的把内核**链接成固件并跑起来**。
 
@@ -128,53 +111,159 @@ MOTE_TASK_SLOT_MAX  = 16
 
 **非板级验证**：外设时序、临界区实测时长不在此列。
 
----
+### 6. 覆盖率（gcovr）
 
-## 6. 覆盖率（gcovr，CI 门槛 85%）
+`--coverage -O0` 构建三个测试目标全跑后统计；CI 以 `--fail-under-line 85`
+守护，覆盖回归直接判红。
 
-本地实测（`--coverage -O0`，三个测试目标全跑）：
-
-```
-moteos/mote.c              226 行  207 覆盖   91%
-moteos/mote_mail.c          52 行   48 覆盖   92%
-moteos/mote_task.c          41 行   39 覆盖   95%
-moteos/port/host/mote_port.h 9 行    9 覆盖  100%
-moteos/port/mote_port.c      2 行    0 覆盖    0%   ← 仅目标机分支（SysTick/wfi），QEMU 冒烟覆盖
-TOTAL                      330 行  303 覆盖   91.8%
-lines 91.8% | functions 91.4% | branches 80.2%
-```
-
-`moteos/port/mote_port.c` 的 0% 是 `#else`（目标机）分支——宿主机不编译它，
-实际由 QEMU 冒烟测试在 Cortex-M3 上覆盖。CI 以 `--fail-under-line 85` 守护，
-覆盖回归会直接判红。
-
----
-
-## 7. 静态分析（cppcheck）
+### 7. 静态分析（cppcheck）
 
 ```
 cppcheck --enable=warning,performance,portability --std=c99 \
          --inline-suppr --error-exitcode=1 -Imoteos -Imoteos/port/host -Itests moteos
 ```
 
-本地 2.21.0 实测：5 文件 0 告警（exit=0）。CI 上任何 error 即失败。
+任何 error 即失败。
 
 ---
 
-## 8. CI 工作流（`.github/workflows/build.yml`）
+## 二、测试结果明细（2026-08-13 实测）
+
+### 2.1 宿主机单元测试
+
+| 构建 | 断言数 | 失败 | 结果 |
+|---|---|---|---|
+| `test_moteos`（默认配置） | 4524 | 0 | ALL PASSED |
+| `test_moteos_assert`（断言开启） | 4524 | 0 | ALL PASSED（全程未触发任何内核断言） |
+| `test_moteos_max`（队列 255 等最坏配置） | 7643 | 0 | ALL PASSED |
+
+### 2.2 交错测试多种子
+
+| 构建 | 种子范围 | 结果 |
+|---|---|---|
+| 常规 | 1~100 | 100/100 通过 |
+| 最坏配置 | 1~40 | 40/40 通过 |
+| CI 常规 job | 1~20 | 通过（自动化） |
+| CI 最坏配置 job | 1~10 | 通过（自动化） |
+| CI ASan job | 1~5 | 通过（自动化，Ubuntu） |
+
+> 本地 MinGW 工具链不带 libasan/libubsan 运行时，ASan/UBSan 仅由 CI
+> （Ubuntu）执行——这是本地环境限制，不是测试缺口。
+
+### 2.3 覆盖率（gcovr，`--coverage -O0`，三目标全跑）
+
+```
+moteos/mote.c                226 行  207 覆盖   91%   （未覆盖：mote_loop/mote_sleep 宿主不可达路径等）
+moteos/mote_mail.c            52 行   48 覆盖   92%   （未覆盖：参数校验分支）
+moteos/mote_task.c            41 行   39 覆盖   95%
+moteos/port/host/mote_port.h   9 行    9 覆盖  100%
+moteos/port/mote_port.c        2 行    0 覆盖    0%   ← 目标机分支（SysTick/wfi），由 QEMU 冒烟覆盖
+TOTAL                        330 行  303 覆盖   91.8%
+```
+
+```
+lines:     91.8% (303/330)    ← CI 门槛 85%
+functions: 91.4% (32/35)
+branches:  80.2% (150/187)
+```
+
+### 2.4 静态分析（cppcheck 2.21.0）
+
+```
+Checking moteos/mote.c ... （含 MOTE_DELAYED_MAX=1 等配置变体）
+Checking moteos/mote_mail.c ...
+Checking moteos/mote_task.c ...
+Checking moteos/port/mote_port.c ...
+Checking moteos/port/mote_port_template.c ...
+5/5 files checked 100% done
+0 告警，exit=0
+```
+
+### 2.5 QEMU 冒烟（Cortex-M3，stm32vldiscovery）
+
+```
+QEMU_PASS
+```
+
+判定通过：Reset 正常进入 main；SysTick 中断向量正确命中弱符号
+`SysTick_Handler`；tick 驱动 500ms 周期定时器到期 2 次；事件投递与
+handler 派发链路完整。整个过程 semihosting 无异常。
+
+### 2.6 交叉编译与体积（arm-none-eabi-gcc，`-Wall -Wextra -Werror`）
+
+| 目标 | 配置 | text | data+bss | 断言 |
+|---|---|---|---|---|
+| Cortex-M0+ | 默认，`-Os` | 1724 B | 280 B | CI：text <2560、RAM <512 ✅ |
+| Cortex-M0+ | 队列 255 / 延时 16，`-Os` | 1760 B | 2384 B | 仅编译（最坏配置体积仅记录） |
+| Cortex-M3 | 默认，无 `-Os` | 3548 B | 280 B | 仅编译 ✅ |
+| RV32IMC（青稞） | 默认，`-Os` | 约 2.0KB（2004 B） | 约 280 B | CI：text <2560、RAM <512 ✅ |
+
+> M0+/M3 数字为本地实测；RV32 数字为 CI 交叉编译 job 实测记录
+> （本地无 RISC-V 工具链）。队列 255 配置的 RAM 2.3KB 是用户把队列开到
+> 极限的代价——内核本身不失控，但 `mote_event_post_replace` 的临界区
+> 时长也随队列长度线性增长（见 usage.md 附录 A 延迟预算）。
+
+### 2.7 集成编译（CI）
+
+- STM32F103 例程 + CMSIS_5 / cmsis-device-f1 真实头文件（钉提交）✅
+- CH32V003 例程 + WCH 官方 SDK 真实头文件（钉提交）✅
+
+---
+
+## 三、结论
+
+### 3.1 每条宣称的支撑证据对照
+
+| 宣称 | 证据 | 强度 |
+|---|---|---|
+| API 语义正确（队列/定时器/任务/邮箱） | 4524~7643 条断言全绿 | 强 |
+| 周期定时器/任务无相位漂移 | 漂移回归测试（含迟到触发场景） | 强（逻辑层面） |
+| ms/period 边界运行时校验生效 | test_ms_bound / test_task_ms_bound | 强 |
+| 并发账目一致性（投递=派发+丢弃，邮箱无滞留，临界区不泄漏） | 交错测试 100 种子全绿 | 强（**对建模语义**） |
+| 断言路径真实可编译、常规路径不触发断言 | test_moteos_assert 全绿 | 中（无负向触发用例，见局限 5） |
+| 内存安全/无 UB | ASan/UBSan（CI，Ubuntu） | 中（CI 环境，非板级） |
+| 启动链正确（向量表/SysTick/tick→定时器→事件流） | QEMU 冒烟（Cortex-M3） | 中（模拟器，非真硅片） |
+| 三内核可编译、默认配置体积受控 | 交叉编译 + 体积断言 | 强 |
+| 覆盖无大面积盲区 | 行覆盖 91.8%（门槛 85%） | 中 |
+| 无静态分析告警 | cppcheck 0 告警 | 中 |
+
+### 3.2 不能下的结论（诚实边界）
+
+1. **中断延迟数字**：usage.md 附录 A 的微秒级估算**没有任何实测数据背书**，
+   必须按板级检查清单用 DWT/示波器实测
+2. **低功耗行为**：WFI 在关中断下到底睡不睡、pending 能否唤醒——
+   尤其青稞 INTSYSCR 与 WFI 的交互——未经任何真实芯片验证
+3. **真实硬件时序**：临界区时长、tick 抖动、相位漂移的**实际值**，
+   宿主机测试与 QEMU 都测不出来
+4. **M0+/RV32 的启动链**：QEMU 冒烟只覆盖 Cortex-M3 一条链
+5. **断言负向路径**：没做过"故意触发断言"的测试（需进程级用例）
+
+### 3.3 总体结论
+
+- **内核逻辑是可信的**：API 语义、并发一致性（建模语义下）、边界校验、
+  内存安全（CI）、启动链（M3 模拟器）、可编译性、体积、覆盖率，均有
+  自动化证据支撑——对一个 v0.x 开发预览项目，这已经是相当厚的验证层
+- **硬件行为是未知的**：中断延迟、低功耗、实板相位抖动等所有"真实世界"
+  数字全部悬空。**任何生产决策都不应基于未经板级验证的行为**
+- 定位与 README「项目状态」一致：值得作为**学习项目与内核逻辑参考**使用；
+  "生产就绪"不成立，上板前必须按 `docs/porting.md` 第 7 章检查清单完成验证
+
+---
+
+## 四、CI 工作流（`.github/workflows/build.yml`）
 
 | job | 内容 |
 |---|---|
 | host-tests | `-Werror` 构建 + ctest 三目标 + 20/10 种子交错 |
 | sanitizers | ASan/UBSan 构建 + ctest + 5 种子 |
 | cross-compile | M0+(-Os+体积断言)/M3/RV32(-Os+体积断言) + 最坏配置构建 + STM32F103/CH32V003 真实 SDK 例程编译（钉 SDK 提交） |
-| qemu-smoke | 见第 5 节 |
+| qemu-smoke | 见第一节第 5 条 |
 | coverage | gcovr，行覆盖 <85% 判红 |
 | cppcheck | error 即失败 |
 
 ---
 
-## 9. 本地运行
+## 五、本地运行
 
 ```bash
 # 全部测试（常规 + 断言开启 + 最坏配置三目标）
@@ -183,8 +272,8 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 
 # 交错测试多种子
-MOTE_TEST_SEED=1 ./build/test_moteos   # Linux/macOS
-$env:MOTE_TEST_SEED=1; ./build/test_moteos.exe   # PowerShell
+MOTE_TEST_SEED=1 ./build/test_moteos          # Linux/macOS
+$env:MOTE_TEST_SEED=1; ./build/test_moteos.exe # PowerShell
 
 # 覆盖率
 cmake -S . -B build-cov -DCMAKE_C_FLAGS="-Werror --coverage -O0"
@@ -205,16 +294,3 @@ qemu-system-arm -M stm32vldiscovery -cpu cortex-m3 -nographic -monitor none \
 cppcheck --enable=warning,performance,portability --std=c99 \
   --inline-suppr --error-exitcode=1 -Imoteos -Imoteos/port/host -Itests moteos
 ```
-
----
-
-## 10. 已知局限（诚实声明）
-
-1. **无板级验证**：内核尚未在任何真实芯片上运行。中断时序、临界区实测
-   时长、WFI 低功耗唤醒（含青稞 INTSYSCR 与 WFI 的交互）、周期相位漂移，
-   均无实测数据——板级验证清单见 `docs/porting.md` 第 7 章
-2. 交错测试验证的是建模并发语义，不是真实硬件时序（见第 2 节局限声明）
-3. QEMU 冒烟只覆盖 Cortex-M3 一条启动链；M0+/RV32 仅有交叉编译
-4. 覆盖率门槛只防大面积盲区，100% 覆盖不等于无 bug
-5. 断言构建只证明"断言路径能编译、常规路径不触发断言"，
-   未做"故意触发断言"的负向用例（会 abort 整进程，需进程级测试才可做）
