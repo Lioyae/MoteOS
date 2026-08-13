@@ -46,8 +46,13 @@ static inline mote_crit_state_t mote_crit_enter(void)
 
 static inline void mote_crit_exit(mote_crit_state_t s)
 {
-    __asm volatile("csrw %[csr], %0" : : [csr] "i" (MOTE_CH32_INTSYSCR),
-                   "r"(s) : "memory");
+    /* ⚠ 操作数编号陷阱：位置号 %0 永远指向第一个列出的操作数。
+     * 这里 s 必须写在 %[csr]（命名立即数）之前，否则 %0 会指到 CSR
+     * 立即数、s 被静默丢弃——旧写法（csrw %[csr], %0 + "i" 在前）曾被
+     * MounRiver 的 WCH 汇编器抓出 "Improper CSRxI immediate (2048)"，
+     * 而上游 xpack 汇编器放行（静默生成错误代码，且 s 永不写回） */
+    __asm volatile("csrw %[csr], %0" : : "r"(s),
+                   [csr] "i" (MOTE_CH32_INTSYSCR) : "memory");
 }
 
 static inline uint32_t mote_crit_active(void)

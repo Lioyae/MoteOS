@@ -34,6 +34,14 @@
 
 ### 修复
 
+- **ch32v 临界区恢复的操作数编号 bug（P0，板级构建实抓）**：
+  `mote_crit_exit` 的 `csrw %[csr], %0` 把 `%0` 指到了 CSR 立即数操作数
+  （`[csr] "i"` 是第一个输入），保存的中断状态 `s` 被静默丢弃——旧代码
+  在 MounRiver 的 WCH 汇编器上报 "Improper CSRxI immediate (2048)"，
+  而 xpack 上游汇编器放行并静默生成错误代码（临界区退出后中断状态
+  永远无法恢复）。修复：`s` 移到第一个操作数位置；已在 WCH gcc
+  8.2/12.2/15.2 三种工具链实测编译通过。此 bug 由真实 MounRiver
+  工程构建暴露——正是"未经板级验证"类风险的一次实锤
 - **timer policy 运行时校验**（评审"校验口径"）：policy 越界返回
   `MOTE_ERR_PARAM`（此前仅靠可关闭的 MOTE_ASSERT，生产构建静默 fallback）
 - **邮箱运行时校验**：手工构造的 `mote_mail_t` 若 `slots==0`（除零）、
