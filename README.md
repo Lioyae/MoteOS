@@ -112,6 +112,7 @@ int main(void)
 
 ## 文档
 
+- 🌐 [MoteOS 中文文档（在线）](https://moteos.zane-leo.top/)
 - [移植教程](docs/porting.md)：Keil / MounRiver 工程集成、SysTick 冲突处理、非 CMSIS 芯片移植、检查清单
 - [使用教程](docs/usage.md)：术语表、事件 / 定时器 / 邮箱 / 任务层逐行详解、完整实战项目
 - [测试文档](docs/test.md)：测试矩阵、交错测试设计、QEMU 冒烟、覆盖率与静态分析、本地运行方法
