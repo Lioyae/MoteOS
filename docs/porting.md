@@ -242,16 +242,17 @@ void Timer1_ISR(void)          /* 你的 1ms 定时器中断，名字按芯片�
 ### 4.2 睡觉：wfi
 
 ```c
-void mote_idle(void)
+void mote_idle(uint32_t next_due)
 {
+    (void)next_due;            /* 固定拍移植忽略；见下方 tickless 小节 */
     __asm volatile("wfi");     /* ARM/RISC-V 通用；其他架构查手册 */
 }
 ```
 
-**注意两个契约**（内核依赖它们消除"漏睡"竞态）：
+**注意三个契约**（内核依赖它们消除"漏睡"竞态）：
 
 1. **本函数在关中断状态下被调用**。内核的睡眠流程是：
-   "关中断 → 检查队列确实为空 → 执行 wfi → 恢复中断"。
+   "关中断 → 检查队列确实为空且无到期项 → 执行 wfi → 恢复中断"。
    ARM/RISC-V 的 wfi 在存在 pending 中断时会立即醒来，
    醒来后内核先恢复中断、让中断先处理，事件不会睡过头。
    所以你的 `mote_idle()` 实现要极短（wfi 级别），不要在里面开中断。
@@ -269,6 +270,37 @@ void mote_idle(void)
    wfi 到底受不受它影响、pending 中断能否唤醒，WCH 文档未明确，
    本仓库**没有任何板级验证**。上板后务必实测两项：空闲电流是否明显下降
    （wfi 真的睡了）、tick 是否准时唤醒（没睡过头）。
+
+### 4.3 tickless 空闲（可选进阶）
+
+`next_due` 是内核已知的**下一到期节拍**（定时器 + 延时投递中的最早者；
+`MOTE_TICK_NONE` = 无任何到期项）。固定拍移植忽略它即可；要省功耗，
+开启 `MOTE_TICKLESS=1`（配合 `MOTE_PORT_HCLK_HZ`）后，空闲时把 SysTick
+重装到 `next_due` 再睡，唤醒后恢复固定拍。参考实现见
+`moteos/port/mote_port.c`（Cortex-M 24 位 SysTick 裸寄存器访问 / WCH 青稞
+64 位比较寄存器，两者都已实现），自写移植时遵守同一协议：
+
+1. **进入 idle 先追平时基**：上次编程以来已流逝但未入账的时间
+   （`mote_tick_advance(ms)` 入账；建议像参考实现一样用周期余数累计，
+   跨唤醒零漂移）。
+2. **nap 上限**受 SysTick 计数器位宽与 2^31 回绕数学共同约束，参考实现
+   取 `min(计数器位宽换算的 ms, 2^30)`。
+3. **wfi 必须与重装同临界区完成**（idle 在关中断状态下被调用，天然满足）；
+   pending 中断会立即唤醒，提前唤醒的部分拍留给下一次 idle 追平。
+4. **SysTick 中断处理**（弱符号 `SysTick_Handler`，用户可重定义强符号接管）
+   负责把满拍时长入账（`mote_tick_advance`）并恢复固定拍重装。
+   若用户重定义了 SysTick_Handler，记得自行调用 `mote_tick()`
+   （固定拍）或按同样协议 `mote_tick_advance()`（tickless）。
+
+**tickless 板级验证清单**（未经任何真实芯片验证，上板必测）：
+
+- [ ] `MOTE_PORT_HCLK_HZ` 与实际主频一致（含时钟树切换后的最终 HCLK）
+- [ ] 空闲时 SysTick 中断间隔随 deadline 变化（示波器/电流波形）
+- [ ] 无到期项时长睡：空闲电流显著低于固定拍，且任意外设中断能唤醒
+- [ ] 提前唤醒（外设中断早于 deadline）后台时基无漂移：跑 1 小时，
+      定时器相位偏移 < 允许值
+- [ ] 24 位（Cortex-M）/ 64 位（青稞）计数器上限换算正确，nap 不溢出
+- [ ] 青稞 INTSYSCR 与 wfi 交互：关闭中断时 wfi 仍能睡眠且可被唤醒
 
 ### 4.3 临界区：四个小函数（保存/恢复式）
 
@@ -382,21 +414,21 @@ static void adc_handler(uint16_t evt, void *param, void *ctx)
 ### 5.4 邮箱：串口接收缓冲（大块数据）
 
 ```c
-MOTE_MAILBOX_DEF(uart_mb, EVT_UART, 8, 64);     /* 8槽×64字节 */
+MOTE_MAILBOX_DEF(uart_mb, EVT_UART, 32, 1);     /* 32格×1字节：逐字节收发 */
 
 void USART1_IRQHandler(void)
 {
     uint8_t c = USART1->DR;
     mote_mail_send(&uart_mb, &c, 1);            /* 中断里深拷贝入槽 */
+    /* 契约：len 必须 1..item_size，超长返回 MOTE_ERR_PARAM（不静默截断） */
 }
 
 static void uart_handler(uint16_t evt, void *param, void *ctx)
 {
     mote_mail_t *mb = param;                     /* param = 邮箱指针 */
-    uint8_t buf[64];
-    int n;
-    while ((n = mote_mail_recv(mb, buf)) > 0) {
-        /* 处理 buf 里 n 字节 */
+    uint8_t c;
+    while (mote_mail_recv(mb, &c) > 0) {         /* 返回实际存入长度（此处恒为 1） */
+        /* 处理 c */
     }
 }
 ```
@@ -429,7 +461,7 @@ int main(void)
 检查：① `SysTick_Config` 参数算对没有；② `mote_port.c` 加进工程没有；③ 主循环是不是 `mote_loop()` 而不是你自己的 `while(1)`。
 
 **Q2：串口狂收数据时会丢字符？**
-邮箱槽数调大（`MOTE_MAILBOX_DEF` 的第 3 个参数）；同时把队列槽数 `MOTE_EVT_QUEUE_SIZE` 调大。注意 `mote_mail_send` 返回 `MOTE_ERR_FULL` 时说明配置小了。
+邮箱槽数调大（`MOTE_MAILBOX_DEF` 的第 3 个参数）；同时把队列槽数 `MOTE_EVT_QUEUE_SIZE` 调大。注意 `mote_mail_send` 返回 `MOTE_ERR_FULL` 时说明配置小了，返回 `MOTE_ERR_PARAM` 时说明发送长度超过格子大小（按实际报文长度设计 `item_size`，别给 1 字节报文开 64 字节的格子）。
 
 **Q3：handler 里能调什么 API？**
 handler 运行在主循环上下文，所以**全部 API 都能调**：`mote_event_post*`、`mote_mail_send/recv`、`mote_timer_start/stop`、`mote_task_start/stop` 都没问题。

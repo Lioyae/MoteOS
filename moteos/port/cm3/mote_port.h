@@ -17,6 +17,10 @@
 
 typedef uint32_t mote_crit_state_t;
 
+/* 体系标签：mote_port.c 的 tickless 实现据此选择 SysTick 访问方式
+ * （Cortex-M：24 位向下计数，裸寄存器地址访问） */
+#define MOTE_PORT_CORTEXM 1
+
 /* 弱符号关键字：mote_port.c 的 SysTick_Handler 用弱符号定义，
  * 用户已有 SysTick 时直接重定义强符号即可接管，无需剔除 mote_port.c */
 #if defined(__CC_ARM)

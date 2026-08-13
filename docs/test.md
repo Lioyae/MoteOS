@@ -17,9 +17,10 @@
 | 5 | 内存 | ASan/UBSan | 内存错误、未定义行为 | sanitizers |
 | 6 | 真实启动 | QEMU 冒烟（Cortex-M3） | 启动/向量表/SysTick/tick→定时器→事件流 | qemu-smoke |
 | 7 | 可编译性 | 交叉编译 + 体积断言 | M0+/M3/RV32 可编译、体积不失控 | cross-compile |
-| 8 | 集成 | 真实 SDK 例程编译 | CMSIS/WCH SDK 真实头文件下例程可编译 | cross-compile |
-| 9 | 覆盖 | gcovr 行覆盖 ≥85% 门槛 | 测试没有大面积盲区 | coverage |
-| 10 | 静态 | cppcheck | warning/performance/portability | cppcheck |
+| 8 | 集成 | 真实 SDK 例程编译 | CMSIS/WCH SDK 真实头文件下例程可编译（例程已启用 tickless） | cross-compile |
+| 9 | 可编译性 | tickless 交叉编译（`MOTE_TICKLESS=1`） | 三种架构的 SysTick 重装/追平代码可编译 | cross-compile |
+| 10 | 覆盖 | gcovr 行覆盖 ≥85% 门槛 | 测试没有大面积盲区 | coverage |
+| 11 | 静态 | cppcheck | warning/performance/portability | cppcheck |
 
 ---
 
@@ -31,11 +32,11 @@
 临界区是否破坏调用方中断状态可在宿主机直接断言）。
 
 | 套件 | 覆盖点 |
-|---|---|
+|---|---|---|
 | `suite_queue` | post/派发、满队报错、replace 覆盖、越界 ID 安全丢弃、空 handler、丢弃计数、drop hook（含重入）、临界区嵌套 |
-| `suite_timer` | 单次/周期、handler 内自停、restart、tick 回绕、延时投递、满队三策略（RETRY/DROP/LATEST）、**相位稳定无漂移**、**ms 边界运行时校验** |
+| `suite_timer` | 单次/周期、handler 内自停、restart、tick 回绕、延时投递（含 replace/cancel）、满队三策略（RETRY/DROP/LATEST）、**相位稳定无漂移**、**ms 边界运行时校验**、**policy 越界运行时校验**、**排序链表触发顺序/重排**、**`mote_next_due` deadline 计算**、**`mote_sleep` 睡眠判定（宿主机 idle 观测）** |
 | `suite_task` | 周期触发、停止、槽池（随配置伸缩）、ctx 透传、**相位无漂移**、**period_ms 边界校验** |
-| `suite_mail` | 收发往返、满箱、空箱、截断、**满队整体回滚**（全有或全无） |
+| `suite_mail` | 收发往返、满箱、空箱、超长拒绝、**满队整体回滚**（全有或全无）、**非法构造（slots==0/空指针/item_size 越界）运行时拒绝** |
 | `suite_interleave` | 见下节 |
 
 ### 2. 交错测试（`tests/test_interleave.c`）

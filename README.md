@@ -37,7 +37,7 @@
 
 MoteOS 是面向小容量单片机（2KB RAM / 16KB Flash 级别）的 C99 事件驱动协作式内核。
 
-- 无汇编、无动态内存分配、无阻塞延时 API
+- 内核无汇编源文件（移植层使用内联汇编；仍需厂商启动文件/向量表）、无动态内存分配、无阻塞延时 API
 - 全部 RAM/Flash 用量在编译期确定，链接器可验证，CI 交叉编译并断言内核体积
 - 支持 ARM Cortex-M0+/M3 与 RISC-V；中断延迟 = tick 中断 + 内核临界区（事件入队 O(1)；邮箱拷贝与 item_size 成正比；post_replace 与队列长度成正比）。临界区时长随配置与主频变化，**需按平台实测**（估算公式与实测方法见 [使用教程附录 A](docs/usage.md)）
 
@@ -71,13 +71,13 @@ MoteOS 是面向小容量单片机（2KB RAM / 16KB Flash 级别）的 C99 事�
 ## 模块
 
 | 模块 | 说明 |
-|---|---|
-| 事件队列 | `mote_event_post` / `mote_event_post_replace`（同 ID 只留最新）/ `mote_event_post_delayed`；内置丢弃计数 `mote_dropped_count()` |
+|---|---|---|
+| 事件队列 | `mote_event_post` / `mote_event_post_replace`（同 ID 只留最新）/ `mote_event_post_delayed`（含 `_replace` 与 `mote_event_cancel_delayed`）；内置丢弃计数 `mote_dropped_count()` |
 | 注册表 | C99 指定初始化器，事件 ID 即下标，O(1) 派发，表常驻 Flash |
-| 定时器 | 静态定义；32 位回绕安全；周期定时器按绝对相位触发（错过拍合并追赶，无累积漂移）；满队策略可选：重试（默认，至少一次）/ 丢弃（严格截止）/ 最新（replace 语义） |
+| 定时器 | 静态定义；32 位回绕安全；链表按到期时刻排序，到期扫描只遍历到期节点（poll 空转 O(1)）；周期定时器按绝对相位触发（错过拍合并追赶，无累积漂移）；满队策略可选：重试 / 丢弃（严格截止）/ 最新（replace 语义）——注意：**周期定时器满队时丢当次、下一拍正常，单次 RETRY 定时器满队时下一拍重试至送达** |
 | 任务层 | 周期回调便捷层：描述符在 Flash（handler + ctx + 周期），状态槽池在 RAM，未启动的任务不占 RAM（可选编译）。注意：**不是 RTOS 任务**——不抢占、handler 被主循环直接同步调用、与事件队列无关 |
-| 邮箱 | 静态槽深拷贝，入箱与事件入队在同一临界区原子完成（全有或全无，无竞态窗口）；临界区时长与 item_size 成正比（可选编译） |
-| 低功耗 | 队列空闲自动进入 `mote_idle()`（默认 wfi），tick 中断唤醒。竞态处理经推理正确，但**各芯片（尤其青稞）的 WFI 行为未经板级验证** |
+| 邮箱 | 静态槽深拷贝，入箱与事件入队在同一临界区原子完成（全有或全无，无竞态窗口）；变长消息（每槽 1..item_size 字节且 item_size≤255，`recv` 返回实际存入长度，超长拒绝不截断，每槽额外 1 字节长度开销）；非法构造（slots==0/空指针等）运行时拒绝（可选编译） |
+| 低功耗 | deadline 感知：`mote_next_due()` 暴露最近到期时刻，空闲时队列空且无到期项才进 `mote_idle(next_due)`；可选 **tickless**（`MOTE_TICKLESS=1`）按下一 deadline 重装 SysTick 再 wfi，唤醒后恢复固定拍。竞态处理经推理正确，但**各芯片（尤其青稞）的 WFI 行为未经板级验证** |
 | 临界区 | 保存/恢复式（PRIMASK / INTSYSCR），支持嵌套 |
 | 可观测性 | `mote_dropped_count()` 统一丢事件计数 + `mote_set_drop_hook()` 丢事件回调（钩子仅限事件/邮箱 API） |
 
@@ -133,7 +133,13 @@ int main(void)
 #define MOTE_ENABLE_TASK    1    /* 任务层开关 */
 #define MOTE_TASK_SLOT_MAX  4    /* 同时活跃任务上限 */
 #define MOTE_ENABLE_MAILBOX 1    /* 邮箱开关 */
+#define MOTE_TICKLESS       1    /* tickless 空闲（需下面这项） */
+#define MOTE_PORT_HCLK_HZ   48000000u  /* 内核主频 Hz，仅 tickless 使用 */
 ```
+
+> `MOTE_TICKLESS` / `MOTE_PORT_HCLK_HZ` 必须**工程级全局定义**（port 层
+> `mote_port.c` 也要编译到），不能只定义在某个 .c 文件里。tickless 使用前
+> 请完成 [移植教程](docs/porting.md) 中的 tickless 板级验证清单。
 
 ## 构建与测试
 

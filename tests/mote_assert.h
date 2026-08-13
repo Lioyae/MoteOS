@@ -11,11 +11,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-/* CI 断言构建专用：mote_config.h 里 MOTE_ASSERT 默认是 ((void)0)，
- * 断言路径（配置边界校验、队列溢出防护）永远不会被编译。
- * 本头文件通过 -include 强制在全部编译单元最前面定义 MOTE_ASSERT，
- * 使断言路径被真实编译并参与运行：测试全程不应触发任何断言，
- * 一旦触发即打印位置并终止（CTest 报红）。仅宿主机测试构建使用。 */
+/* CI 断言构建专用：mote_config.h 里 MOTE_ASSERT 默认已开启（回调
+ * mote_assert_fail，默认实现停机/abort）。本头文件通过 -include 强制在
+ * 全部编译单元最前面定义 MOTE_ASSERT 为 abort 版本，保证断言路径被真实
+ * 编译并参与运行，且触发即打印位置并终止（CTest 报红）。仅宿主机测试
+ * 构建使用。 */
 
 #ifndef MOTE_ASSERT
 #define MOTE_ASSERT(x)                                                         \

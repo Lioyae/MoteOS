@@ -180,6 +180,20 @@ mote_event_post_delayed(EVT_LED, NULL, 100);   /* 100ms 后再把纸条放进筐
 适合"延迟关屏""开机 3 秒后自检"。同时最多 `MOTE_DELAYED_MAX`（默认 4）张在路上，超了返回 `MOTE_ERR_FULL`。
 `ms` 传 0 或 ≥2^31（约 24.8 天）返回 `MOTE_ERR_PARAM`（与定时器同口径的运行时校验）。
 
+两个配套 API（第 2 章新增）：
+
+```c
+/* 覆盖版：同一 EVT 只留最新一张在路上（重复调用不占新格子） */
+mote_event_post_delayed_replace(EVT_LED, NULL, 100);
+
+/* 取消：把还在路上的延时纸条收回来。返回 MOTE_ERR_NOT_FOUND = 没找到
+ * （可能已经投递出去了，也可能 evt/param 对不上） */
+mote_event_cancel_delayed(EVT_LED, NULL);
+```
+
+典型用途：按键按下 3 秒后休眠；3 秒内再次按键就把旧的 cancel 掉再 post
+一张新的（或用 replace 版直接覆盖）。
+
 ### 2.4 纸条上带东西：MOTE_P / MOTE_U32
 
 纸条的 param 是个 `void *`（万能指针），能粘一个数值或指向数据。
@@ -247,6 +261,9 @@ mote_timer_restart(&t, 2000);      /* 把时间改成 2 秒后响。前提：它
 4. **时长上限约 24.8 天**（2^31-1 ms，回绕比较的数学边界），超出直接返回
    `MOTE_ERR_PARAM`（运行时校验，不依赖可关闭的断言）；更长的间隔用
    "周期闹钟 + 计数"自己累积
+5. **闹钟内部按到期时刻排队**：内核把闹钟按"什么时候响"排序，
+   没到点的闹钟每次 poll 只需看一眼队头（O(1)），闹钟多了也不拖慢主循环；
+   `mote_timer_restart` 改时间后会自动重新排队
 
 ### 3.5 队列满时的三种策略（重要）
 
@@ -275,6 +292,7 @@ mote_timer_start_ex(&t, EVT_ADC, NULL, 20, true, MOTE_TIMER_POLICY_LATEST);
 | 状态类、只关心最新值 | LATEST |
 
 默认的 `mote_timer_start` = RETRY（单次）/ DROP（周期，满队丢当次并计入 `mote_dropped_count()`）。
+RETRY 满队时定时器不释放，**下一拍**自动重试（所以是"至少一次"，最坏晚一拍）；policy 传越界值返回 `MOTE_ERR_PARAM`（运行时校验）。
 
 ### 3.6 循环闹钟的相位稳定（重要）
 
@@ -301,16 +319,21 @@ mote_timer_start_ex(&t, EVT_ADC, NULL, 20, true, MOTE_TIMER_POLICY_LATEST);
 ```c
 MOTE_MAILBOX_DEF(uart_mb,      /* 柜子名字，随便起（宏会帮你生成对应变量） */
                  EVT_UART,     /* 有货到柜时，投几号纸条（取件通知） */
-                 8,            /* 柜子有几个格子 */
-                 64);          /* 每个格子多大（字节） */
+                 32,           /* 柜子有几个格子 */
+                 1);           /* 每个格子多大（字节）：串口逐字节收发 → 1 字节一格 */
 ```
+
+> **长度契约**：每格最大 `item_size` 字节（1..255，`MOTE_MAILBOX_DEF` 编译期
+> 强制），`mote_mail_send` 的 `len` 必须 1..item_size（超长或 0 返回
+> `MOTE_ERR_PARAM`，不再静默截断）；`mote_mail_recv` 返回**实际存入的字节数**。
+> 每格额外花 1 字节 RAM 记录长度。
 
 ### 4.1 经典用法：中断放货，handler 取货
 
 ```c
 /* 串口中断里——放货（中断里唯一允许的"数据类"操作）。
- * 注意：send 在关中断状态下拷贝 item_size 字节（入箱与事件入队同一临界区
- * 原子完成），中断延迟与格子大小成正比——延迟预算与实测方法见附录 A */
+ * 注意：send 在关中断状态下拷贝 len 字节（入箱与事件入队同一临界区
+ * 原子完成），中断延迟与拷贝字节数成正比——延迟预算与实测方法见附录 A */
 void USART1_IRQHandler(void)
 {
     uint8_t c = (uint8_t)USART1->DR;   /* 读串口寄存器，截成 8 位存进 c */
@@ -323,13 +346,10 @@ static void uart_handler(uint16_t evt, void *param, void *ctx)
 {
     /* 纸条的 param 就是"哪个柜子来货了"（内核自动粘上的柜子指针） */
     mote_mail_t *mb = (mote_mail_t *)param;   /* 把万能指针还原成"柜子类型"指针 */
-    uint8_t buf[64];
-    int n;
+    uint8_t c;
 
-    while ((n = mote_mail_recv(mb, buf)) > 0) {   /* 取一箱货；n = 取出多少字节；空柜返回 -1 */
-        for (int i = 0; i < n; i++) {
-            /* 处理 buf[i]，直到把所有格子清空 */
-        }
+    while (mote_mail_recv(mb, &c) > 0) {   /* 取一格；空柜返回 -1 */
+        /* 处理 c，直到把所有格子清空 */
     }
 }
 ```
@@ -338,15 +358,20 @@ static void uart_handler(uint16_t evt, void *param, void *ctx)
 
 公式：`格子数 ≥ 中断最坏情况下一口气来的字节数 ÷ 每格字节数`
 
-例：串口 115200bps = 每秒约 11520 字节。假设最忙时 handler 10ms 没空处理，来了 115 字节；
-每格 64 字节 → 格子数取 `115÷64 向上取整 + 1` ≈ 3。取 4~8 更保险。
+例：串口 115200bps = 每秒约 11520 字节。假设最忙时 handler 10ms 没空处理，来了 115 字节：
 
-`mote_mail_send` 返回 `MOTE_ERR_FULL` = 格子全满 = 配置小了，调大或降波特率。
+- 每格 1 字节（逐字节收发）：格子数 ≥ 115，取 128（此时格子数 = 字节数）
+- 每格 64 字节（按帧收，如整条报文）：格子数取 `115÷64 向上取整 + 1` ≈ 3，取 4~8 更保险
+
+逐字节方案格子多但每格小，按你的 RAM 余量和延迟预算选。
+
+`mote_mail_send` 返回 `MOTE_ERR_FULL` = 格子全满 = 配置小了，调大或降波特率；
+返回 `MOTE_ERR_PARAM` = `len` 超格或为 0，检查发送长度。
 
 ### 4.3 注意
 
-- 发送超过格子大小的数据会被**静默截断**（只复印前 N 字节，N = 格子大小）
-- `mote_mail_recv` 返回取出的字节数（=格子大小），空柜返回 -1
+- 发送长度必须 1..格子大小：超长**直接拒绝**（返回 `MOTE_ERR_PARAM`），不再静默截断
+- `mote_mail_recv` 返回实际存入的字节数（1..格子大小），空柜返回 -1——不会回吐整格残留
 - 一个 handler 可以管多个柜子：靠 `param` 区分是哪个柜子来的
 
 ---
@@ -421,8 +446,8 @@ enum {
 static uint32_t g_brightness;      /* 当前亮度 0~100 */
 static bool g_breath_on;           /* 呼吸模式开关 */
 
-/* 3. 柜子与闹钟 */
-MOTE_MAILBOX_DEF(uart_mb, EVT_QUERY, 4, 32);
+/* 3. 柜子与闹钟（长度契约见第 4 章：len 必须 ≤ item_size） */
+MOTE_MAILBOX_DEF(uart_mb, EVT_QUERY, 32, 1);
 static mote_timer_t breath_timer;
 
 /* 4. 工人：各管一摊 */
@@ -596,8 +621,10 @@ handler 里用 `evt` 参数区分是哪个纸条。
 
 **Q7：MOTE_DELAYED_MAX 用完了还能递延时纸条吗？**
 返回 `MOTE_ERR_FULL`。要么调大配置，要么改用定时器。
-注意定时器是链表结构，每次 `mote_poll` 会线性扫描全部定时器，
-几十个以内没问题，不建议堆上百个（需要更多就用软件时间轮或换 RTOS）。
+注意延时槽是固定池（每次 poll 线性扫描 `MOTE_DELAYED_MAX` 个槽），
+而定时器是**按到期时刻排序**的链表（每次 poll 只遍历到期节点，
+空转 O(1)），几十个定时器也没问题，不建议堆上百个（需要更多就用
+软件时间轮或换 RTOS）。
 
 **Q8：中断里想干点复杂的活？**
 正确姿势：中断只递纸条，把活写在 handler 里。这就是 MoteOS 的全部哲学。
@@ -621,7 +648,7 @@ handler 里用 `evt` 参数区分是哪个纸条。
 |---|---|---|
 | `mote_event_post` | 队列入队 | O(1)，十几条指令 |
 | `mote_event_post_replace` | 从新到旧扫描队列找同 ID | O(队列长度)，最坏 = `MOTE_EVT_QUEUE_SIZE` |
-| `mote_mail_send` | 拷贝 item_size 字节 + 事件入队 | O(item_size)，每 4 字节约几条指令 |
+| `mote_mail_send` | 拷贝 len 字节（≤ item_size）+ 事件入队 | O(len)，每 4 字节约几条指令 |
 | `mote_tick` | 关中断 + 自增 + 恢复 | 约 10 条指令 |
 
 **粗算公式**（48MHz 主频、-Os，按每字节 6~8 周期估算）：

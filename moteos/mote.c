@@ -49,8 +49,12 @@ static struct {
 
 static void mote_q_push(uint16_t evt, void *param)
 {
-    uint8_t idx = (uint8_t)((s_q.head + s_q.count) % MOTE_EVT_QUEUE_SIZE);
+    unsigned idx = (unsigned)s_q.head + s_q.count;
+
     MOTE_ASSERT(s_q.count < MOTE_EVT_QUEUE_SIZE);
+    if (idx >= MOTE_EVT_QUEUE_SIZE) {
+        idx -= MOTE_EVT_QUEUE_SIZE; /* head+count < 2*SIZE，一次减法足够 */
+    }
     s_q.items[idx].evt = evt;
     s_q.items[idx].param = param;
     s_q.count++;
@@ -63,7 +67,11 @@ static bool mote_q_pop(uint16_t *evt, void **param)
     }
     *evt = s_q.items[s_q.head].evt;
     *param = s_q.items[s_q.head].param;
-    s_q.head = (uint8_t)((s_q.head + 1) % MOTE_EVT_QUEUE_SIZE);
+    if (s_q.head + 1 >= MOTE_EVT_QUEUE_SIZE) {
+        s_q.head = 0;
+    } else {
+        s_q.head++;
+    }
     s_q.count--;
     return true;
 }
@@ -146,7 +154,11 @@ mote_status_t mote_event_post_replace(uint16_t evt, void *param)
 
     /* 从新到旧查找：覆盖最新一条同 ID 事件（latest wins） */
     for (uint8_t i = s_q.count; i > 0; i--) {
-        uint8_t idx = (uint8_t)((s_q.head + i - 1) % MOTE_EVT_QUEUE_SIZE);
+        unsigned idx = (unsigned)s_q.head + i - 1;
+
+        if (idx >= MOTE_EVT_QUEUE_SIZE) {
+            idx -= MOTE_EVT_QUEUE_SIZE; /* head+i-1 < 2*SIZE，一次减法足够 */
+        }
         if (s_q.items[idx].evt == evt) {
             s_q.items[idx].param = param;
             mote_crit_exit(cs);
@@ -172,10 +184,15 @@ mote_status_t mote_event_post_replace(uint16_t evt, void *param)
 
 void mote_tick(void)
 {
+    mote_tick_advance(MOTE_TICK_MS);
+}
+
+void mote_tick_advance(uint32_t ms)
+{
     /* 统一契约：s_tick 的一切访问都在临界区内完成（含本函数）。
      * M0+ 上 32 位读改写非原子，依赖"关中断"保证与主循环侧读写互斥 */
     mote_crit_state_t cs = mote_crit_enter();
-    s_tick++;
+    s_tick += ms;
     mote_crit_exit(cs);
 }
 
@@ -195,28 +212,39 @@ uint32_t mote_ticks(void)
     return t;
 }
 
-static void mote_timer_unlink(mote_timer_t *t)
+/* 链表不变量：s_timers 按 due 升序排列（回绕安全比较），
+ * start/restart/process 之后恒有序；头节点即最早到期者 */
+static bool mote_timer_unlink(mote_timer_t *t)
 {
-    mote_timer_t **pp = &s_timers;
+    mote_timer_t **pp;
+    bool found = false;
+    mote_crit_state_t cs;
 
-    while (*pp != NULL) {
+    /* 链表操作统一进临界区：定时器 API 契约虽是主循环专用，
+     * 但误用于中断上下文时（最难排查的那类竞态）也不至于腐坏链表 */
+    cs = mote_crit_enter();
+    for (pp = &s_timers; *pp != NULL; pp = &(*pp)->next) {
         if (*pp == t) {
             *pp = t->next;
             t->next = NULL;
-            return;
+            found = true;
+            break;
         }
-        pp = &(*pp)->next;
     }
+    mote_crit_exit(cs);
+    return found;
 }
 
-static bool mote_timer_linked(mote_timer_t *t)
+/* 按 due 升序插入（调用者须已持有临界区） */
+static void mote_timer_insert_sorted(mote_timer_t *t)
 {
-    for (mote_timer_t *p = s_timers; p != NULL; p = p->next) {
-        if (p == t) {
-            return true;
-        }
+    mote_timer_t **pp = &s_timers;
+
+    while (*pp != NULL && (int32_t)((*pp)->due - t->due) < 0) {
+        pp = &(*pp)->next;
     }
-    return false;
+    t->next = *pp;
+    *pp = t;
 }
 
 mote_status_t mote_timer_start(mote_timer_t *t, uint16_t evt, void *param,
@@ -237,17 +265,22 @@ mote_status_t mote_timer_start_ex(mote_timer_t *t, uint16_t evt, void *param,
     if (t == NULL || ms == 0 || ms >= 0x80000000u) {
         return MOTE_ERR_PARAM;
     }
-    MOTE_ASSERT((uint8_t)policy <= MOTE_TIMER_POLICY_LATEST);
+    /* policy 同样运行时校验：越界值此前会静默落入 default 分支
+     * 变成 RETRY 语义 */
+    if ((uint8_t)policy > MOTE_TIMER_POLICY_LATEST) {
+        return MOTE_ERR_PARAM;
+    }
     mote_timer_stop(t); /* 重复 start 视为重启 */
-    cs = mote_crit_enter(); /* s_tick 由 tick 中断更新，读取必须关中断 */
+    cs = mote_crit_enter();
+    /* s_tick 由 tick 中断更新，读取必须关中断；字段写入与排序插入
+     * 同区完成，杜绝"字段半写 + 中断窥视"窗口 */
     t->due = s_tick + ms;
-    mote_crit_exit(cs);
     t->period = periodic ? ms : 0;
     t->evt = evt;
     t->param = param;
     t->policy = (uint8_t)policy;
-    t->next = s_timers;
-    s_timers = t;
+    mote_timer_insert_sorted(t);
+    mote_crit_exit(cs);
     return MOTE_OK;
 }
 
@@ -267,15 +300,16 @@ mote_status_t mote_timer_restart(mote_timer_t *t, uint32_t ms)
     if (t == NULL || ms == 0 || ms >= 0x80000000u) {
         return MOTE_ERR_PARAM;
     }
-    if (!mote_timer_linked(t)) {
+    if (!mote_timer_unlink(t)) {
         return MOTE_ERR_NOT_FOUND;
     }
-    cs = mote_crit_enter(); /* s_tick 由 tick 中断更新，读取必须关中断 */
+    cs = mote_crit_enter();
     t->due = s_tick + ms;
-    mote_crit_exit(cs);
     if (t->period != 0) {
         t->period = ms;
     }
+    mote_timer_insert_sorted(t); /* due 变更后按新到期时刻重排 */
+    mote_crit_exit(cs);
     return MOTE_OK;
 }
 
@@ -326,60 +360,142 @@ mote_status_t mote_event_post_delayed(uint16_t evt, void *param, uint32_t ms)
 #endif
 }
 
+mote_status_t mote_event_post_delayed_replace(uint16_t evt, void *param,
+                                              uint32_t ms)
+{
+    /* 时长运行时校验：与 mote_event_post_delayed 同口径 */
+    if (ms == 0 || ms >= 0x80000000u) {
+        return MOTE_ERR_PARAM;
+    }
+#if MOTE_DELAYED_MAX > 0
+    mote_status_t st;
+    mote_crit_state_t cs;
+
+    cs = mote_crit_enter();
+
+    /* replace 语义：同 evt 已存在则原地替换为最新（只留最新一份） */
+    for (int i = 0; i < MOTE_DELAYED_MAX; i++) {
+        if (s_delayed[i].used && s_delayed[i].evt == evt) {
+            s_delayed[i].due = s_tick + ms;
+            s_delayed[i].param = param;
+            mote_crit_exit(cs);
+            MOTE_TEST_INJECT();
+            return MOTE_OK;
+        }
+    }
+    for (int i = 0; i < MOTE_DELAYED_MAX; i++) {
+        if (!s_delayed[i].used) {
+            s_delayed[i].used = 1;
+            s_delayed[i].due = s_tick + ms;
+            s_delayed[i].evt = evt;
+            s_delayed[i].param = param;
+            st = MOTE_OK;
+            mote_crit_exit(cs);
+            MOTE_TEST_INJECT();
+            return st;
+        }
+    }
+    mote_note_dropped(evt); /* 口径统一：槽池满视为拒绝 */
+    mote_crit_exit(cs);
+    MOTE_TEST_INJECT();
+    return MOTE_ERR_FULL;
+#else
+    (void)evt;
+    (void)param;
+    (void)ms;
+    {
+        mote_crit_state_t cs = mote_crit_enter();
+        mote_note_dropped(evt);
+        mote_crit_exit(cs);
+    }
+    return MOTE_ERR_FULL;
+#endif
+}
+
+mote_status_t mote_event_cancel_delayed(uint16_t evt, void *param)
+{
+#if MOTE_DELAYED_MAX > 0
+    mote_crit_state_t cs = mote_crit_enter();
+
+    for (int i = 0; i < MOTE_DELAYED_MAX; i++) {
+        if (s_delayed[i].used && s_delayed[i].evt == evt &&
+            s_delayed[i].param == param) {
+            s_delayed[i].used = 0;
+            mote_crit_exit(cs);
+            return MOTE_OK;
+        }
+    }
+    mote_crit_exit(cs);
+    return MOTE_ERR_NOT_FOUND;
+#else
+    (void)evt;
+    (void)param;
+    return MOTE_ERR_NOT_FOUND;
+#endif
+}
+
 /* ---------------- 分发与主循环 ---------------- */
 
 static void mote_process_timers(void)
 {
     uint32_t now = mote_ticks(); /* 单一快照：M0+ 上裸读 32 位 s_tick 会撕裂 */
-    mote_timer_t *t = s_timers;
+    mote_timer_t **pp = &s_timers;
 
-    while (t != NULL) {
-        mote_timer_t *next = t->next; /* 安全迭代：先缓存后继 */
+    /* 链表按 due 升序：头节点未到期则全部未到期，提前终止——
+     * poll 空转 O(1)，与定时器总数无关；到期节点从表头摘除处理，
+     * 相位推进/重试后按新 due 重插，保持有序 */
+    while (*pp != NULL) {
+        mote_timer_t *t = *pp;
+
         MOTE_TEST_INJECT(); /* 交错测试窗口：定时器列表遍历期间伪中断可插入 */
-        if ((int32_t)(now - t->due) >= 0) {
-            if (t->period != 0) {
-                /* 相位稳定：due 按周期推进而不是"从现在重算"（due += period），
-                 * handler/主循环延迟不会造成相位逐周期累积漂移；
-                 * 错过多拍只合并投递一次（本拍），相位照旧；
-                 * 落后超过 MOTE_TIMER_CATCHUP_MAX 拍时放弃旧相位重新对齐，
-                 * 防止极端落后时的长循环 */
-                uint32_t n = 0;
-                do {
-                    t->due += t->period;
-                } while ((int32_t)(now - t->due) >= 0 &&
-                         ++n < MOTE_TIMER_CATCHUP_MAX);
-                if ((int32_t)(now - t->due) >= 0) {
-                    t->due = now + t->period;
-                }
-                if (t->policy == MOTE_TIMER_POLICY_LATEST) {
-                    mote_event_post_replace(t->evt, t->param);
-                } else {
-                    /* 周期：RETRY/DROP 都等同丢当次（下一拍正常） */
-                    mote_event_post(t->evt, t->param);
-                }
+        if ((int32_t)(now - t->due) < 0) {
+            break;
+        }
+        *pp = t->next; /* 先摘除再处理 */
+        t->next = NULL;
+
+        if (t->period != 0) {
+            /* 相位稳定：due 按周期推进而不是"从现在重算"（due += period），
+             * handler/主循环延迟不会造成相位逐周期累积漂移；
+             * 错过多拍只合并投递一次（本拍），相位照旧；
+             * 落后超过 MOTE_TIMER_CATCHUP_MAX 拍时放弃旧相位重新对齐，
+             * 防止极端落后时的长循环 */
+            uint32_t n = 0;
+            do {
+                t->due += t->period;
+            } while ((int32_t)(now - t->due) >= 0 &&
+                     ++n < MOTE_TIMER_CATCHUP_MAX);
+            if ((int32_t)(now - t->due) >= 0) {
+                t->due = now + t->period;
+            }
+            mote_timer_insert_sorted(t); /* 相位推进后重插，保持有序 */
+            if (t->policy == MOTE_TIMER_POLICY_LATEST) {
+                mote_event_post_replace(t->evt, t->param);
             } else {
-                switch (t->policy) {
-                case MOTE_TIMER_POLICY_DROP:
-                    /* 严格截止：失败即弃并释放 */
-                    mote_event_post(t->evt, t->param);
-                    mote_timer_unlink(t);
-                    break;
-                case MOTE_TIMER_POLICY_LATEST:
-                    /* replace 失败说明满队且无同 ID：截止已过，释放 */
-                    mote_event_post_replace(t->evt, t->param);
-                    mote_timer_unlink(t);
-                    break;
-                case MOTE_TIMER_POLICY_RETRY:
-                default:
-                    /* 至少一次：送达才释放，满队保留重试 */
-                    if (mote_event_post(t->evt, t->param) == MOTE_OK) {
-                        mote_timer_unlink(t);
-                    }
+                /* 周期：RETRY/DROP 都等同丢当次（下一拍正常） */
+                mote_event_post(t->evt, t->param);
+            }
+        } else {
+            switch (t->policy) {
+            case MOTE_TIMER_POLICY_DROP:
+                /* 严格截止：失败即弃并释放（已摘除即释放） */
+                mote_event_post(t->evt, t->param);
+                break;
+            case MOTE_TIMER_POLICY_LATEST:
+                /* replace 失败说明满队且无同 ID：截止已过，释放 */
+                mote_event_post_replace(t->evt, t->param);
+                break;
+            default:
+                /* RETRY（至少一次）：送达才释放，满队时把 due 后移一拍
+                 * 并重插，下一拍重试（避免同 poll 内反复投递死循环） */
+                if (mote_event_post(t->evt, t->param) == MOTE_OK) {
                     break;
                 }
+                t->due = now + 1;
+                mote_timer_insert_sorted(t);
+                break;
             }
         }
-        t = next;
     }
 
 #if MOTE_DELAYED_MAX > 0
@@ -438,15 +554,42 @@ bool mote_poll(void)
     return false;
 }
 
+/* 内核已知的下一到期节拍；无待到期项返回 MOTE_TICK_NONE。
+ * 定时器链表有序 → 表头即最早（O(1)）；延时槽线性扫（O(MOTE_DELAYED_MAX)） */
+uint32_t mote_next_due(void)
+{
+    uint32_t best;
+    mote_crit_state_t cs = mote_crit_enter();
+
+    best = (s_timers != NULL) ? s_timers->due : MOTE_TICK_NONE;
+#if MOTE_DELAYED_MAX > 0
+    for (int i = 0; i < MOTE_DELAYED_MAX; i++) {
+        if (s_delayed[i].used &&
+            (best == MOTE_TICK_NONE ||
+             (int32_t)(s_delayed[i].due - best) < 0)) {
+            best = s_delayed[i].due;
+        }
+    }
+#endif
+    mote_crit_exit(cs);
+    return best;
+}
+
 /* 临界区内检查并睡眠：消除"查空 → 中断投递 → WFI 漏睡"竞态。
+ * deadline 感知：队列空且最近到期项未到（或根本无到期项）才睡，
+ * 否则立即返回让主循环处理到期工作；判定与睡眠同临界区原子完成。
  * ARM/RISC-V 的 wfi 在 pending 中断存在时立即唤醒，
  * 唤醒后先恢复中断再返回，事件不会睡过头 */
-static void mote_sleep(void)
+void mote_sleep(void)
 {
     mote_crit_state_t cs = mote_crit_enter();
 
     if (s_q.count == 0) {
-        mote_idle(); /* 在关中断状态下调用（契约见 mote.h） */
+        uint32_t next_due = mote_next_due();
+
+        if (next_due == MOTE_TICK_NONE || (int32_t)(next_due - s_tick) > 0) {
+            mote_idle(next_due); /* 在关中断状态下调用（契约见 mote.h） */
+        }
     }
     mote_crit_exit(cs);
 }

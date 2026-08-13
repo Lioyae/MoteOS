@@ -166,11 +166,13 @@ static void test_one_shot_survives_full_queue(void)
     for (int i = 0; i < 5; i++) {
         mote_tick();
     }
-    /* 到期但队列满：事件未入队，定时器保留重试 */
+    /* 到期但队列满：事件未入队，定时器 due 后移一拍保留重试 */
     for (int i = 0; i < MOTE_EVT_QUEUE_SIZE; i++) {
         TEST_ASSERT(mote_poll() == true);
     }
-    /* 队列空了，下一次 poll 定时器重试成功 */
+    /* 队列空了，但 RETRY 重试发生在下一拍 */
+    TEST_ASSERT(mote_poll() == false);
+    mote_tick();
     TEST_ASSERT(mote_poll() == true);
     TEST_ASSERT(s_last_param == 7);
     TEST_ASSERT(mote_poll() == false); /* 单次定时器已释放 */
@@ -276,6 +278,206 @@ static void test_ms_bound(void)
     mote_timer_stop(&t);
 }
 
+static void test_policy_invalid(void)
+{
+    static mote_timer_t t;
+
+    /* policy 越界必须运行时拒绝（此前仅靠可关闭的 MOTE_ASSERT，
+     * 生产构建会静默 fallback 成 RETRY 语义） */
+    mote_init(table, 2);
+    TEST_ASSERT(mote_timer_start_ex(&t, 0, NULL, 10, false,
+                                    (mote_timer_policy_t)0xFF)
+                == MOTE_ERR_PARAM);
+    TEST_ASSERT(mote_timer_start_ex(&t, 0, NULL, 10, false,
+                                    MOTE_TIMER_POLICY_LATEST) == MOTE_OK);
+    mote_timer_stop(&t);
+}
+
+static void test_sorted_fire_order(void)
+{
+    static mote_timer_t t1, t2, t3;
+
+    /* 乱序启动：链表按 due 排序，触发顺序必须按到期时刻 */
+    mote_init(table, 2);
+    s_calls = 0;
+    TEST_ASSERT(mote_timer_start(&t1, 0, MOTE_P(1), 30, false) == MOTE_OK);
+    TEST_ASSERT(mote_timer_start(&t2, 0, MOTE_P(2), 10, false) == MOTE_OK);
+    TEST_ASSERT(mote_timer_start(&t3, 0, MOTE_P(3), 20, false) == MOTE_OK);
+    for (int i = 0; i < 9; i++) {
+        mote_tick();
+        TEST_ASSERT(mote_poll() == false);
+    }
+    mote_tick();                       /* 第 10 拍：t2 */
+    TEST_ASSERT(mote_poll() == true);
+    TEST_ASSERT(s_last_param == 2);
+    for (int i = 0; i < 9; i++) {
+        mote_tick();
+        TEST_ASSERT(mote_poll() == false);
+    }
+    mote_tick();                       /* 第 20 拍：t3 */
+    TEST_ASSERT(mote_poll() == true);
+    TEST_ASSERT(s_last_param == 3);
+    for (int i = 0; i < 9; i++) {
+        mote_tick();
+        TEST_ASSERT(mote_poll() == false);
+    }
+    mote_tick();                       /* 第 30 拍：t1 */
+    TEST_ASSERT(mote_poll() == true);
+    TEST_ASSERT(s_last_param == 1);
+    TEST_ASSERT(mote_poll() == false);
+}
+
+static void test_restart_resorts(void)
+{
+    static mote_timer_t t1, t2;
+
+    /* restart 改变 due 后必须重排：t1 原 100 拍后到期，第 10 拍 restart
+     * 成 5 拍 → due=15，应早于 t2 的 50 拍触发 */
+    mote_init(table, 2);
+    s_calls = 0;
+    TEST_ASSERT(mote_timer_start(&t1, 0, MOTE_P(1), 100, false) == MOTE_OK);
+    TEST_ASSERT(mote_timer_start(&t2, 0, MOTE_P(2), 50, false) == MOTE_OK);
+    for (int i = 0; i < 10; i++) {
+        mote_tick();
+    }
+    TEST_ASSERT(mote_timer_restart(&t1, 5) == MOTE_OK);
+    for (int i = 0; i < 4; i++) {
+        mote_tick();
+        TEST_ASSERT(mote_poll() == false);
+    }
+    mote_tick();                       /* 第 15 拍：重排后的 t1 */
+    TEST_ASSERT(mote_poll() == true);
+    TEST_ASSERT(s_last_param == 1);
+    for (int i = 0; i < 34; i++) {
+        mote_tick();
+        TEST_ASSERT(mote_poll() == false);
+    }
+    mote_tick();                       /* 第 50 拍：t2 */
+    TEST_ASSERT(mote_poll() == true);
+    TEST_ASSERT(s_last_param == 2);
+}
+
+static void test_next_due(void)
+{
+    static mote_timer_t t1, t2;
+
+    mote_init(table, 2);
+    TEST_ASSERT(mote_next_due() == MOTE_TICK_NONE); /* 无任何到期项 */
+
+    TEST_ASSERT(mote_timer_start(&t1, 0, NULL, 100, false) == MOTE_OK);
+    TEST_ASSERT(mote_next_due() == 100);
+    TEST_ASSERT(mote_timer_start(&t2, 0, NULL, 30, false) == MOTE_OK);
+    TEST_ASSERT(mote_next_due() == 30); /* 表头即最早 */
+    mote_timer_stop(&t2);
+    TEST_ASSERT(mote_next_due() == 100);
+
+    /* 延时投递混入：比定时器更早 */
+    TEST_ASSERT(mote_event_post_delayed(0, NULL, 20) == MOTE_OK);
+    TEST_ASSERT(mote_next_due() == 20);
+    TEST_ASSERT(mote_event_cancel_delayed(0, NULL) == MOTE_OK);
+    TEST_ASSERT(mote_next_due() == 100);
+
+    /* 定时器到期触发后链表清空 → NONE */
+    for (int i = 0; i < 100; i++) {
+        mote_tick();
+        mote_poll();
+    }
+    TEST_ASSERT(mote_next_due() == MOTE_TICK_NONE);
+}
+
+static void test_delayed_replace(void)
+{
+    mote_init(table, 2);
+    s_calls = 0;
+
+    /* replace：同 evt 只留最新（更早的 deadline、新的 param） */
+    TEST_ASSERT(mote_event_post_delayed(0, MOTE_P(1), 100) == MOTE_OK);
+    TEST_ASSERT(mote_event_post_delayed_replace(0, MOTE_P(2), 50) == MOTE_OK);
+    for (int i = 0; i < 49; i++) {
+        mote_tick();
+        TEST_ASSERT(mote_poll() == false);
+    }
+    mote_tick();
+    TEST_ASSERT(mote_poll() == true);
+    TEST_ASSERT(s_last_param == 2); /* 被替换为新 param */
+    TEST_ASSERT(s_calls == 1);      /* 只有一份，没有两份 */
+    for (int i = 0; i < 60; i++) {
+        mote_tick();
+        TEST_ASSERT(mote_poll() == false); /* 旧 deadline 不再投递 */
+    }
+
+    /* replace 不额外占槽：槽池满时对已存在 evt 的 replace 仍成功 */
+    for (uint16_t evt = 2; evt < 2 + MOTE_DELAYED_MAX; evt++) {
+        TEST_ASSERT(mote_event_post_delayed(evt, NULL, 1000) == MOTE_OK);
+    }
+    TEST_ASSERT(mote_event_post_delayed_replace(3, MOTE_P(9), 500) == MOTE_OK);
+    /* 无同 evt 且槽池满 → FULL */
+    TEST_ASSERT(mote_event_post_delayed_replace(99, MOTE_P(9), 500)
+                == MOTE_ERR_FULL);
+    /* ms 校验同口径 */
+    TEST_ASSERT(mote_event_post_delayed_replace(3, MOTE_P(9), 0)
+                == MOTE_ERR_PARAM);
+}
+
+static void test_delayed_cancel(void)
+{
+    mote_init(table, 2);
+    s_calls = 0;
+    TEST_ASSERT(mote_event_post_delayed(0, MOTE_P(7), 10) == MOTE_OK);
+    TEST_ASSERT(mote_event_cancel_delayed(0, MOTE_P(7)) == MOTE_OK);
+    TEST_ASSERT(mote_event_cancel_delayed(0, MOTE_P(7))
+                == MOTE_ERR_NOT_FOUND); /* 已取消，无匹配 */
+    for (int i = 0; i < 15; i++) {
+        mote_tick();
+        TEST_ASSERT(mote_poll() == false); /* 取消后不再投递 */
+    }
+
+    /* param 参与匹配：不同 param 不受影响 */
+    TEST_ASSERT(mote_event_post_delayed(0, MOTE_P(1), 10) == MOTE_OK);
+    TEST_ASSERT(mote_event_post_delayed(0, MOTE_P(2), 10) == MOTE_OK);
+    TEST_ASSERT(mote_event_cancel_delayed(0, MOTE_P(1)) == MOTE_OK);
+    for (int i = 0; i < 9; i++) {
+        mote_tick();
+        TEST_ASSERT(mote_poll() == false);
+    }
+    mote_tick();
+    TEST_ASSERT(mote_poll() == true);
+    TEST_ASSERT(s_last_param == 2); /* 只剩未被取消的那份 */
+}
+
+static void test_sleep_deadline(void)
+{
+    static mote_timer_t t;
+
+    mote_init(table, 2);
+    mote_host_idle_count = 0;
+    mote_host_idle_last_due = 0;
+
+    /* 无到期项：睡眠，收到 MOTE_TICK_NONE */
+    mote_sleep();
+    TEST_ASSERT(mote_host_idle_count == 1);
+    TEST_ASSERT(mote_host_idle_last_due == MOTE_TICK_NONE);
+
+    /* 有未来到期项：睡眠，deadline 正确传参 */
+    TEST_ASSERT(mote_timer_start(&t, 0, NULL, 100, false) == MOTE_OK);
+    mote_sleep();
+    TEST_ASSERT(mote_host_idle_count == 2);
+    TEST_ASSERT(mote_host_idle_last_due == 100);
+
+    /* 已过期（tick 越过 due）：不睡，主循环立即处理 */
+    mote_tick_set(200);
+    mote_sleep();
+    TEST_ASSERT(mote_host_idle_count == 2);
+    mote_timer_stop(&t);
+
+    /* 队列非空：不睡 */
+    mote_tick_set(0);
+    TEST_ASSERT(mote_event_post(0, NULL) == MOTE_OK);
+    mote_sleep();
+    TEST_ASSERT(mote_host_idle_count == 2);
+    (void)mote_poll(); /* 清空队列 */
+}
+
 void suite_timer(void)
 {
     test_timer_one_shot();
@@ -289,4 +491,11 @@ void suite_timer(void)
     test_latest_coalesces();
     test_periodic_no_drift();
     test_ms_bound();
+    test_policy_invalid();
+    test_sorted_fire_order();
+    test_restart_resorts();
+    test_next_due();
+    test_delayed_replace();
+    test_delayed_cancel();
+    test_sleep_deadline();
 }

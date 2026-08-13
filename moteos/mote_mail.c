@@ -41,12 +41,26 @@ static void mote_copy(void *dst, const void *src, uint16_t n)
     }
 }
 
+/* 邮箱字段合法性：手工构造的 mote_mail_t 可能出现 slots==0（除零）、
+ * 缓冲区/长度表为空指针（野指针）、item_size 越界（lens 为 uint8_t，
+ * 长度会截断）、head/count 越界（越界读）等，运行时一律拒绝而不是崩溃 */
+static bool mote_mail_invalid(const mote_mail_t *mb)
+{
+    return mb == NULL || mb->buf == NULL || mb->lens == NULL ||
+           mb->slots == 0 || mb->item_size == 0 || mb->item_size > 255 ||
+           mb->head >= mb->slots || mb->count > mb->slots;
+}
+
 mote_status_t mote_mail_send(mote_mail_t *mb, const void *data, uint16_t len)
 {
     mote_status_t st;
     mote_crit_state_t cs;
 
-    if (mb == NULL || (data == NULL && len != 0)) {
+    /* 定长上限 + 变长下限：len 必须 1..item_size。
+     * 此前超长静默截断、不足 item_size 时 recv 回吐整格残留垃圾，
+     * 接收端无法知道实际长度；现在每槽记录实际存入长度 */
+    if (mote_mail_invalid(mb) || data == NULL || len == 0 ||
+        len > mb->item_size) {
         return MOTE_ERR_PARAM;
     }
 
@@ -60,10 +74,14 @@ mote_status_t mote_mail_send(mote_mail_t *mb, const void *data, uint16_t len)
         mote_note_dropped(mb->evt); /* 口径统一：被拒绝的入箱也计入 */
         st = MOTE_ERR_FULL;
     } else {
-        uint16_t n = (len > mb->item_size) ? mb->item_size : len;
-        uint8_t idx = (uint8_t)((mb->head + mb->count) % mb->slots);
+        unsigned idx = (unsigned)mb->head + mb->count;
+
         MOTE_ASSERT(mb->count < mb->slots);
-        mote_copy(&mb->buf[idx * mb->item_size], data, n);
+        if (idx >= mb->slots) {
+            idx -= mb->slots; /* head+count < 2*slots，一次减法足够 */
+        }
+        mote_copy(&mb->buf[idx * mb->item_size], data, len);
+        mb->lens[idx] = (uint8_t)len;
         mb->count++;
         st = mote_event_enqueue(mb->evt, (void *)mb);
         if (st != MOTE_OK) {
@@ -80,18 +98,24 @@ int mote_mail_recv(mote_mail_t *mb, void *data)
     int n;
     mote_crit_state_t cs;
 
-    if (mb == NULL || data == NULL) {
+    if (mote_mail_invalid(mb) || data == NULL) {
         return -1;
     }
 
     cs = mote_crit_enter();
     if (mb->count == 0) {
         n = -1;
+    } else if (mb->count > mb->slots || mb->head >= mb->slots) {
+        n = -1; /* 结构被写坏：拒绝而不是越界读 */
     } else {
-        mote_copy(data, &mb->buf[mb->head * mb->item_size], mb->item_size);
-        mb->head = (uint8_t)((mb->head + 1) % mb->slots);
+        n = mb->lens[mb->head]; /* 实际存入长度，不是整格 */
+        mote_copy(data, &mb->buf[mb->head * mb->item_size], (uint16_t)n);
+        if (mb->head + 1 >= mb->slots) {
+            mb->head = 0;
+        } else {
+            mb->head++;
+        }
         mb->count--;
-        n = mb->item_size;
     }
     mote_crit_exit(cs);
 

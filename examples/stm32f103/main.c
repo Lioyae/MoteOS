@@ -20,6 +20,14 @@
  *     旧版标准库（SPL）用户把 stm32f1xx.h 换回 stm32f10x.h 即可
  */
 
+/* ---- tickless 低功耗：空闲时按下一 deadline 重装 SysTick 再 wfi ----
+ * ⚠ 这两个宏必须工程级全局生效（mote_port.c 也要编译到）：Keil 请在
+ * 工程宏定义处设置，或直接在 moteos/mote_config.h 里定义；只在本文件定义
+ * 会静默退化为固定拍。关掉即回到固定 1ms 拍（更简单、功耗更高）。
+ * 使用 tickless 前先按 docs/porting.md 的 tickless 板级验证清单实测 */
+#define MOTE_TICKLESS 1
+#define MOTE_PORT_HCLK_HZ 72000000u  /* Blue Pill 默认主频 72MHz */
+
 /* 器件选择宏：STM32F103xB = F103C8/CB（Blue Pill），按你的型号改 */
 #define STM32F103xB
 #include "stm32f1xx.h"
@@ -31,8 +39,9 @@ enum {
     EVT_UART = 1,  /* 收到串口数据（邮箱事件） */
 };
 
-/* ---- 邮箱：4 槽 × 32 字节 ---- */
-MOTE_MAILBOX_DEF(uart_mb, EVT_UART, 4, 32);
+/* ---- 邮箱：32 槽 × 1 字节（逐字节收发：每字节一格、一条事件；
+ * 邮箱契约：send 的 len 必须 ≤ item_size，recv 返回实际存入长度） ---- */
+MOTE_MAILBOX_DEF(uart_mb, EVT_UART, 32, 1);
 
 static mote_timer_t blink_timer;
 
@@ -53,20 +62,17 @@ static void uart_handler(uint16_t evt, void *param, void *ctx)
 {
     (void)evt; (void)ctx;
     mote_mail_t *mb = (mote_mail_t *)param;
-    uint8_t buf[32];
-    int n;
+    uint8_t c;
 
     /* 注意：这里等 TXE（数据寄存器空）即可——上一字节从 DR 搬进移位寄存器
      * 后就能写下一字节，只等 0~1 个字节时间。
-     * ⚠ 不要等 TC（传输完成）：那要等整个字节从引脚发完，32 字节回环会
-     * 阻塞约 2.8ms，违反铁律 1（handler 毫秒级返回）。
+     * ⚠ 不要等 TC（传输完成）：那要等整个字节从引脚发完，逐字节回环会
+     * 每字节阻塞约 87µs，数据一多违反铁律 1（handler 毫秒级返回）。
      * 更严谨的姿势是"环形缓冲 + TXE 发送中断"状态机（见 docs/usage.md
      * 附录 B），handler 完全不碰忙等 */
-    while ((n = mote_mail_recv(mb, buf)) > 0) {
-        for (int i = 0; i < n; i++) {
-            while (!(USART1->SR & USART_SR_TXE)) { }
-            USART1->DR = buf[i];
-        }
+    while (mote_mail_recv(mb, &c) > 0) {
+        while (!(USART1->SR & USART_SR_TXE)) { }
+        USART1->DR = c;
     }
 }
 
@@ -106,7 +112,8 @@ int main(void)
     SystemInit();
     gpio_init();
 
-    /* 1ms 节拍：SysTick 中断由 port 层接管（SysTick_Handler → mote_tick） */
+    /* 节拍：SysTick 中断由 port 层接管（SysTick_Handler → mote_tick / tickless 长拍）。
+     * 初始按 MOTE_TICK_MS 配固定拍，tickless 空闲时 port 层会动态重装 */
     SysTick_Config(SystemCoreClock / (1000 / MOTE_TICK_MS));
 
     mote_init(evt_table, sizeof(evt_table) / sizeof(evt_table[0]));

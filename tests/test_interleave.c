@@ -186,8 +186,11 @@ static void test_interleave_consistency(void)
     }
     /* 总账二：邮箱全清，无滞留数据 */
     TEST_ASSERT(mote_mail_recv(&iv_mb, buf) == -1);
-    /* 总账三：派发的普通事件数与邮箱出货量对得上 */
-    TEST_ASSERT(s_plain_calls + (s_recv_bytes / IV_SIZE) == poll_true);
+    /* 总账三：派发的普通事件数与邮箱出货量对得上。
+     * 每次成功的 mail_send 存 1 字节且入队 1 个事件 → 派发的邮箱事件数
+     * = 累计取出的字节数（handler 每次派发都会把柜子 drain 空，
+     * 总数恒等，不依赖单次 drain 几格） */
+    TEST_ASSERT(s_plain_calls + s_recv_bytes == poll_true);
 }
 
 void suite_interleave(void)

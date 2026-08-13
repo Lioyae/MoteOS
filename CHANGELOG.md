@@ -1,5 +1,106 @@
 # 更新日志
 
+## v0.5.0 - 2026-08-13（开发预览，破坏性变更）
+
+按技术评审整改：定时器排序、deadline 感知睡眠 + tickless、校验口径统一、
+延时事件 API 补齐、邮箱运行时校验。
+
+### 破坏性变更
+
+- **`mote_idle()` 签名变更**：`void mote_idle(void)` → `void mote_idle(uint32_t next_due)`
+  （内核传入下一到期节拍，`MOTE_TICK_NONE` = 无到期项）。固定拍移植忽略入参即可；
+  自写 port 需同步改签名（参考 `port/mote_port.c` 与移植模板）
+- **`MOTE_MAILBOX_DEF` 新增编译期约束**：`item_bytes ≤ 255`（与每槽 uint8_t
+  长度记录自洽），超限直接编译报错
+- **单次 RETRY 定时器重试节奏**：满队失败由"下一次 poll 重试"改为"下一拍重试"
+  （due 后移一拍重排）；"至少一次送达"语义不变，最坏晚 1 拍
+
+### 新增
+
+- **deadline 感知睡眠 + tickless**（评审"假低功耗"）：
+  - `mote_next_due()`：内核已知的下一到期节拍（定时器表头 + 延时槽）
+  - `mote_tick_advance(ms)`：可变步长时基推进（tickless 必需）
+  - `MOTE_TICKLESS=1` + `MOTE_PORT_HCLK_HZ`：空闲时按下一 deadline 重装
+    SysTick 再 wfi，唤醒后恢复固定拍；进入 idle 先追平提前唤醒已流逝时基
+    （周期余数累计，零漂移）；Cortex-M（24 位裸寄存器访问）与青稞（64 位
+    比较寄存器）均已实现，nap 上限受计数器位宽与 2^31 回绕数学共同约束
+  - 三份例程启用 tickless（宏须工程级全局定义，已注释说明）
+- **延时事件 API 补齐**（评审"API 残缺"）：
+  - `mote_event_post_delayed_replace()`：同 evt 只留最新在路上（不占新槽）
+  - `mote_event_cancel_delayed()`：取消未到期的延时投递（evt+param 匹配）
+- **定时器排序链表**（评审"O(n) 扫描"）：链表按 due 升序，到期扫描只遍历
+  到期节点（poll 空转 O(1)）；周期定时器相位推进/单次 RETRY 重试后按新
+  due 重排；`mote_timer_restart` 变更 due 后自动重排
+
+### 修复
+
+- **timer policy 运行时校验**（评审"校验口径"）：policy 越界返回
+  `MOTE_ERR_PARAM`（此前仅靠可关闭的 MOTE_ASSERT，生产构建静默 fallback）
+- **邮箱运行时校验**：手工构造的 `mote_mail_t` 若 `slots==0`（除零）、
+  `buf/lens` 为空指针、`item_size` 越界、head/count 越界，send/recv 一律
+  返回 `MOTE_ERR_PARAM` / -1 而不是崩溃
+- 删除死 typedef `mote_evt_id_t`
+
+### 测试
+
+- `test_timer` 新增：排序触发顺序、restart 重排、policy 越界、
+  `mote_next_due`（空/多定时器/延时槽/混合）、延时 replace/cancel、
+  `mote_sleep` 睡眠判定（宿主机 idle 观测：无到期项/未来 deadline 睡眠、
+  已过期/队列非空不睡）
+- `test_mail` 新增：非法构造邮箱运行时拒绝
+- 既有用例适配 RETRY 下一拍重试语义
+
+### CI
+
+- 新增三档 tickless 交叉编译（M0+/M3/RV32，`MOTE_TICKLESS=1` +
+  `MOTE_PORT_HCLK_HZ`）；真实 SDK 例程编译步骤补全局 `-D`（例程已启用
+  tickless，port 层必须拿到同值）
+
+### 文档
+
+- porting.md：mote_idle 新契约、tickless 参考实现协议与**板级验证清单**
+  （HCLK 换算、提前唤醒追平、计数器位宽、青稞 WFI 交互）
+- usage.md：延时 replace/cancel 用法、定时器排序说明、RETRY 节奏、
+  邮箱 item_size≤255；Q7 更新（定时器不再全表扫描）
+- README/README_EN：模块表（低功耗/tickless/定时器/邮箱）、配置示例、
+  tickless 全局定义警告
+
+## v0.4.2 - 2026-08-13（开发预览）
+
+### 修复
+
+- **邮箱变长契约（P0 数据错误）**：此前 `mote_mail_send` 接受小于格子的
+  `len` 且静默截断超长，而 `mote_mail_recv` 永远回吐整格 `item_size`——
+  槽内残留垃圾会被当数据送出（串口逐字节回环每收 1 字节发 32 字节垃圾）。
+  现在每槽额外 1 字节记录实际存入长度：`send` 要求 `len ∈ 1..item_size`
+  （超长/为 0 返回 `MOTE_ERR_PARAM`，不再静默截断），`recv` 返回实际存入
+  字节数。三份例程同步改为 32 槽 × 1 字节的逐字节邮箱
+- **定时器链表操作进临界区**（P1）：`mote_timer_start_ex` 的链表头插入与
+  全部字段写入、`mote_timer_unlink` 的摘链统一包临界区——定时器 API
+  误用于中断上下文时不再腐坏链表（契约仍为主循环专用，此为纵深防御）
+- **环形索引去取模**（P2）：事件队列 push/pop/replace 扫描与邮箱索引由
+  `% SIZE` 改为条件减法——任意队列/槽数都不再引入 `__aeabi_udiv` 等
+  libgcc 除法依赖（M0+ 无硬件除法），与"零隐藏依赖"口径一致
+- **MOTE_ASSERT 默认开启**（P2）：默认实现回调弱符号 `mote_assert_fail()`
+  （目标机停机、宿主机 abort，可重定义为复位/记录），生产构建可显式
+  定义 `-DMOTE_ASSERT(x)=((void)0)` 关闭；移植模板补充该移植步骤
+- **青稞 INTSYSCR 编号可配置**（P1）：CSR 编号收敛为 `MOTE_CH32_INTSYSCR`
+  宏（默认 0x800，可按代次 `-D` 覆盖），并注明 V2/V3 代次差异须按手册
+  上板核验
+
+### 文档
+
+- README/README_EN：删除"零汇编"措辞（改为"内核无汇编源文件，仍需厂商
+  启动文件"）；满队策略表补明"周期定时器满队丢当次、仅单次定时器重试至
+  送达"；邮箱模块说明变长契约
+- usage.md 第 4 章/附录 A、porting.md 5.4/Q2 同步变长契约与逐字节邮箱用法
+
+### 测试
+
+- `test_mail`：新增变长往返用例、超长/零长拒绝用例（替换原"静默截断"用例），
+  满队/回滚用例断言改实际存入长度
+- `test_interleave`：邮箱总账等式改按实际字节数核算
+
 ## v0.4.1 - 2026-08-13（开发预览）
 
 ### 修复

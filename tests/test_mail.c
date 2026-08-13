@@ -44,18 +44,18 @@ static void test_send_recv_roundtrip(void)
 
 static void test_send_full(void)
 {
-    uint8_t data = 0xAA;
+    uint8_t data = 0x55;
 
     mote_init(table, 1);
     for (int i = 0; i < MB_SLOTS; i++) {
         TEST_ASSERT(mote_mail_send(&mb, &data, 1) == MOTE_OK);
     }
     TEST_ASSERT(mote_mail_send(&mb, &data, 1) == MOTE_ERR_FULL);
-    /* 全部取出，满槽状态恢复 */
+    /* 全部取出，满槽状态恢复；每箱实际存入 1 字节 */
     for (int i = 0; i < MB_SLOTS; i++) {
         TEST_ASSERT(mote_poll() == true);
-        TEST_ASSERT(s_recv_len == MB_SIZE);
-        TEST_ASSERT(s_recv_buf[0] == 0xAA);
+        TEST_ASSERT(s_recv_len == 1);
+        TEST_ASSERT(s_recv_buf[0] == 0x55);
     }
     TEST_ASSERT(mote_mail_send(&mb, &data, 1) == MOTE_OK);
     TEST_ASSERT(mote_poll() == true); /* 收尾 drain，恢复空箱 */
@@ -70,17 +70,34 @@ static void test_recv_empty(void)
     TEST_ASSERT(mote_mail_recv(&mb2, buf) == -1);
 }
 
-static void test_send_truncates(void)
+static void test_send_variable_len_roundtrip(void)
+{
+    uint8_t data[MB_SIZE] = { 1, 2, 3, 4, 5, 6, 7, 8 };
+
+    mote_init(table, 1);
+    s_recv_len = -1;
+    /* 变长契约：len ≤ item_size，recv 返回实际存入长度，
+     * 不再回吐整格残留垃圾 */
+    TEST_ASSERT(mote_mail_send(&mb, data, 3) == MOTE_OK);
+    TEST_ASSERT(mote_poll() == true);
+    TEST_ASSERT(s_recv_len == 3);
+    TEST_ASSERT(memcmp(s_recv_buf, data, 3) == 0);
+    TEST_ASSERT(mote_poll() == false);
+}
+
+static void test_send_oversize_rejected(void)
 {
     uint8_t data[16];
 
     memset(data, 0x5A, sizeof(data));
     mote_init(table, 1);
     s_recv_len = -1;
-    TEST_ASSERT(mote_mail_send(&mb, data, sizeof(data)) == MOTE_OK);
-    TEST_ASSERT(mote_poll() == true);
-    TEST_ASSERT(s_recv_len == MB_SIZE);           /* 截断到槽大小 */
-    TEST_ASSERT(s_recv_buf[MB_SIZE - 1] == 0x5A);
+    /* 超长不再静默截断：拒绝且不入箱、不投事件 */
+    TEST_ASSERT(mote_mail_send(&mb, data, sizeof(data)) == MOTE_ERR_PARAM);
+    TEST_ASSERT(mote_poll() == false);
+    TEST_ASSERT(mote_mail_recv(&mb, s_recv_buf) == -1);
+    /* len == 0 同样拒绝 */
+    TEST_ASSERT(mote_mail_send(&mb, data, 0) == MOTE_ERR_PARAM);
 }
 
 static void test_send_rollback_on_queue_full(void)
@@ -105,8 +122,47 @@ static void test_send_rollback_on_queue_full(void)
     s_recv_len = -1;
     TEST_ASSERT(mote_mail_send(&mb, &data, 1) == MOTE_OK);
     TEST_ASSERT(mote_poll() == true);
-    TEST_ASSERT(s_recv_len == MB_SIZE);
+    TEST_ASSERT(s_recv_len == 1);
     TEST_ASSERT(s_recv_buf[0] == 0x55);
+}
+
+static void test_invalid_mailbox_rejected(void)
+{
+    static uint8_t buf[8];
+    static uint8_t lens[2];
+    mote_mail_t bad;
+
+    /* 手工构造的非法邮箱（slots==0 → 除零、空指针、item_size 越界等）
+     * 必须运行时拒绝而不是崩溃 */
+    memset(&bad, 0, sizeof(bad));
+    bad.buf = buf;
+    bad.lens = lens;
+    bad.slots = 0;            /* 除零风险 */
+    bad.item_size = 8;
+    TEST_ASSERT(mote_mail_send(&bad, buf, 1) == MOTE_ERR_PARAM);
+    TEST_ASSERT(mote_mail_recv(&bad, buf) == -1);
+
+    bad.slots = 2;
+    bad.item_size = 0;        /* 非法格宽 */
+    TEST_ASSERT(mote_mail_send(&bad, buf, 1) == MOTE_ERR_PARAM);
+    TEST_ASSERT(mote_mail_recv(&bad, buf) == -1);
+
+    bad.item_size = 300;      /* 超出 lens(uint8_t) 表达范围 */
+    TEST_ASSERT(mote_mail_send(&bad, buf, 1) == MOTE_ERR_PARAM);
+    TEST_ASSERT(mote_mail_recv(&bad, buf) == -1);
+
+    bad.item_size = 8;
+    bad.lens = NULL;          /* 空长度表 */
+    TEST_ASSERT(mote_mail_send(&bad, buf, 1) == MOTE_ERR_PARAM);
+    TEST_ASSERT(mote_mail_recv(&bad, buf) == -1);
+
+    bad.lens = lens;
+    bad.buf = NULL;           /* 空数据区 */
+    TEST_ASSERT(mote_mail_send(&bad, buf, 1) == MOTE_ERR_PARAM);
+    TEST_ASSERT(mote_mail_recv(&bad, buf) == -1);
+
+    TEST_ASSERT(mote_mail_send(NULL, buf, 1) == MOTE_ERR_PARAM);
+    TEST_ASSERT(mote_mail_recv(NULL, buf) == -1);
 }
 
 void suite_mail(void)
@@ -114,6 +170,8 @@ void suite_mail(void)
     test_send_recv_roundtrip();
     test_send_full();
     test_recv_empty();
-    test_send_truncates();
+    test_send_variable_len_roundtrip();
+    test_send_oversize_rejected();
     test_send_rollback_on_queue_full();
+    test_invalid_mailbox_rejected();
 }

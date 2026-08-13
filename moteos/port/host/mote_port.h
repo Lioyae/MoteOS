@@ -20,6 +20,10 @@ typedef uint32_t mote_crit_state_t;
 
 extern uint32_t mote_host_primask;
 
+/* 测试观测：mote_idle 调用次数与最近一次传入的 next_due */
+extern uint32_t mote_host_idle_count;
+extern uint32_t mote_host_idle_last_due;
+
 static inline mote_crit_state_t mote_crit_enter(void)
 {
     mote_crit_state_t s = mote_host_primask;

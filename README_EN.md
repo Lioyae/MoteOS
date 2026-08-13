@@ -37,7 +37,7 @@
 
 MoteOS is a C99 event-driven cooperative kernel for small MCUs (2KB RAM / 16KB Flash class).
 
-- No assembly, no dynamic memory allocation, no blocking delay APIs
+- No assembly source files in the kernel (port layer uses inline assembly; vendor startup files/vector tables are still required), no dynamic memory allocation, no blocking delay APIs
 - All RAM/Flash usage is fixed at compile time; CI cross-compiles and asserts kernel size
 - Supports ARM Cortex-M0+/M3 and RISC-V; interrupt latency = tick interrupt + kernel critical sections (event enqueue O(1); mailbox copy proportional to item_size; post_replace proportional to queue length). Critical-section duration depends on configuration and clock, and **must be measured per platform** (estimation formulas and measurement methods in the [usage guide appendix A](docs/usage.md))
 
@@ -71,13 +71,13 @@ MoteOS is a C99 event-driven cooperative kernel for small MCUs (2KB RAM / 16KB F
 ## Modules
 
 | Module | Description |
-|---|---|
-| Event queue | `mote_event_post` / `mote_event_post_replace` (latest wins per ID) / `mote_event_post_delayed`; drop counter `mote_dropped_count()` |
+|---|---|---|
+| Event queue | `mote_event_post` / `mote_event_post_replace` (latest wins per ID) / `mote_event_post_delayed` (with `_replace` and `mote_event_cancel_delayed`); drop counter `mote_dropped_count()` |
 | Dispatch table | C99 designated initializers; event ID is the index; O(1) dispatch; table lives in Flash |
-| Timers | Statically defined; 32-bit wraparound safe; periodic timers fire on absolute phase (missed ticks coalesce, no cumulative drift); selectable full-queue policy: retry (default, at-least-once) / drop (strict deadline) / latest (replace semantics) |
+| Timers | Statically defined; 32-bit wraparound safe; list sorted by due time so expiry scanning only visits due nodes (idle poll is O(1)); periodic timers fire on absolute phase (missed ticks coalesce, no cumulative drift); selectable full-queue policy: retry / drop (strict deadline) / latest (replace semantics) — note: **periodic timers drop the beat on a full queue and proceed next beat; one-shot RETRY timers retry on the next tick until delivered** |
 | Task layer | Periodic-callback convenience layer: descriptors in Flash (handler + ctx + period), state slot pool in RAM; inactive tasks consume no RAM (optional). Note: **not RTOS tasks** — no preemption, handlers are called synchronously by the main loop, unrelated to the event queue |
-| Mailbox | Static slots with deep copy; slot insert and event enqueue are atomic within one critical section (all-or-nothing, no race window); critical-section duration is proportional to item_size (optional) |
-| Low power | Enters `mote_idle()` (wfi by default) when idle; woken by the tick interrupt. Race handling is correct by reasoning, but **WFI behavior on each chip (especially QingKe) is not board-verified** |
+| Mailbox | Static slots with deep copy; slot insert and event enqueue are atomic within one critical section (all-or-nothing, no race window); variable-length items (1..item_size bytes per slot with item_size≤255, `recv` returns the actual stored length, oversize sends are rejected — never truncated, +1 byte length overhead per slot); invalid constructions (slots==0, NULL buffers, etc.) are rejected at runtime (optional) |
+| Low power | Deadline-aware: `mote_next_due()` exposes the next expiry; the kernel sleeps (into `mote_idle(next_due)`) only when the queue is empty and nothing is due; optional **tickless** idle (`MOTE_TICKLESS=1`) reloads SysTick to the next deadline before wfi and restores the fixed rate on wake. Race handling is correct by reasoning, but **WFI behavior on each chip (especially QingKe) is not board-verified** |
 | Critical section | Save/restore style (PRIMASK / INTSYSCR), nesting-safe |
 | Observability | `mote_dropped_count()` unified drop counter + `mote_set_drop_hook()` drop callback (event/mailbox APIs only inside the hook) |
 
@@ -133,7 +133,13 @@ All tunables live in `moteos/mote_config.h`:
 #define MOTE_ENABLE_TASK    1    /* task layer switch */
 #define MOTE_TASK_SLOT_MAX  4    /* max simultaneously active tasks */
 #define MOTE_ENABLE_MAILBOX 1    /* mailbox switch */
+#define MOTE_TICKLESS       1    /* tickless idle (requires the next line) */
+#define MOTE_PORT_HCLK_HZ   48000000u  /* core clock in Hz, tickless only */
 ```
+
+> `MOTE_TICKLESS` / `MOTE_PORT_HCLK_HZ` must be defined **project-wide**
+> (`mote_port.c` compiles against them too), not just in one .c file.
+> Complete the tickless board-verification checklist in the [porting guide](docs/porting.md) before use.
 
 ## Build and Test
 

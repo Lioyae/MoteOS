@@ -21,6 +21,15 @@
 
 #include "ch32v00x.h"
 
+/* 青稞中断系统控制寄存器（INTSYSCR）的 CSR 编号。
+ * ⚠ 同一 port 头文件服务 V2 代（CH32V003/V007）与 V3 代（CH32V203/V307），
+ * 不同代次手册的 CSR 映射存在差异，默认值 0x800 以本 SDK 的 core_riscv.h
+ * 口径为准；若目标代次不同，用 -DMOTE_CH32_INTSYSCR=<值> 覆盖。
+ * 此寄存器直接决定临界区与 WFI 行为，上板前必须按目标芯片手册实测核验。 */
+#ifndef MOTE_CH32_INTSYSCR
+#define MOTE_CH32_INTSYSCR 0x800
+#endif
+
 typedef uint32_t mote_crit_state_t;
 
 /* 弱符号关键字：mote_port.c 的 SysTick_Handler 用弱符号定义，
@@ -30,20 +39,21 @@ typedef uint32_t mote_crit_state_t;
 static inline mote_crit_state_t mote_crit_enter(void)
 {
     mote_crit_state_t s;
-    __asm volatile("csrr %0, 0x800" : "=r"(s));
+    __asm volatile("csrr %0, %[csr]" : "=r"(s) : [csr] "i" (MOTE_CH32_INTSYSCR));
     __disable_irq();
     return s;
 }
 
 static inline void mote_crit_exit(mote_crit_state_t s)
 {
-    __asm volatile("csrw 0x800, %0" : : "r"(s) : "memory");
+    __asm volatile("csrw %[csr], %0" : : [csr] "i" (MOTE_CH32_INTSYSCR),
+                   "r"(s) : "memory");
 }
 
 static inline uint32_t mote_crit_active(void)
 {
     uint32_t s;
-    __asm volatile("csrr %0, 0x800" : "=r"(s));
+    __asm volatile("csrr %0, %[csr]" : "=r"(s) : [csr] "i" (MOTE_CH32_INTSYSCR));
     return (s & 0x80u) ? 0u : 1u; /* bit7=0 表示中断被关闭 */
 }
 
