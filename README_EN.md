@@ -19,6 +19,9 @@
   <a href="https://github.com/Lioyae/MoteOS">
     <img src="https://img.shields.io/badge/language-C99-2b6cb0?style=for-the-badge" alt="C99">
   </a>
+  <a href="https://moteos.zane-leo.top/">
+    <img src="https://img.shields.io/badge/Docs-中文文档站-dd6b20?style=for-the-badge" alt="MoteOS Docs (Chinese)">
+  </a>
   <a href="https://github.com/Lioyae/MoteOS/stargazers">
     <img src="https://img.shields.io/github/stars/Lioyae/MoteOS?style=for-the-badge&color=d69e2e" alt="Stars">
   </a>
@@ -112,6 +115,7 @@ int main(void)
 
 ## Documentation
 
+- 🌐 [Online documentation site (Chinese)](https://moteos.zane-leo.top/): usage, porting, and asking guides
 - [Porting guide](docs/porting.md) (Chinese): Keil / MounRiver integration, SysTick conflicts, non-CMSIS chips, checklist
 - [Usage guide](docs/usage.md) (Chinese): glossary, line-by-line walkthrough of events / timers / mailboxes / tasks, full example project
 - [Test documentation](docs/test.md) (Chinese): test matrix, interleave test design, QEMU smoke, coverage & static analysis, local run instructions

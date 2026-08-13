@@ -23,6 +23,9 @@
   <a href="https://github.com/Lioyae/MoteOS">
     <img src="https://img.shields.io/badge/language-C99-2b6cb0?style=for-the-badge" alt="C99">
   </a>
+  <a href="https://moteos.zane-leo.top/">
+    <img src="https://img.shields.io/badge/Docs-中文文档站-dd6b20?style=for-the-badge" alt="MoteOS Docs">
+  </a>
   <a href="https://github.com/Lioyae/MoteOS/stargazers">
     <img src="https://img.shields.io/github/stars/Lioyae/MoteOS?style=for-the-badge&color=d69e2e" alt="Stars">
   </a>
@@ -112,7 +115,7 @@ int main(void)
 
 ## 文档
 
-- 🌐 [MoteOS 中文文档（在线）](https://moteos.zane-leo.top/)
+- 🌐 [MoteOS 中文文档（在线）](https://moteos.zane-leo.top/)：使用教程 / 移植教程 / 提问指南
 - [移植教程](docs/porting.md)：Keil / MounRiver 工程集成、SysTick 冲突处理、非 CMSIS 芯片移植、检查清单
 - [使用教程](docs/usage.md)：术语表、事件 / 定时器 / 邮箱 / 任务层逐行详解、完整实战项目
 - [测试文档](docs/test.md)：测试矩阵、交错测试设计、QEMU 冒烟、覆盖率与静态分析、本地运行方法
