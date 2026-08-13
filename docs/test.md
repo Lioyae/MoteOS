@@ -134,16 +134,16 @@ cppcheck --enable=warning,performance,portability --std=c99 \
 
 | 构建 | 断言数 | 失败 | 结果 |
 |---|---|---|---|
-| `test_moteos`（默认配置） | 4524 | 0 | ALL PASSED |
-| `test_moteos_assert`（断言开启） | 4524 | 0 | ALL PASSED（全程未触发任何内核断言） |
-| `test_moteos_max`（队列 255 等最坏配置） | 7643 | 0 | ALL PASSED |
+| `test_moteos`（默认配置） | 4798 | 0 | ALL PASSED |
+| `test_moteos_assert`（断言开启） | 4798 | 0 | ALL PASSED（全程未触发任何内核断言） |
+| `test_moteos_max`（队列 255 等最坏配置） | 7929 | 0 | ALL PASSED |
 
 ### 2.2 交错测试多种子
 
 | 构建 | 种子范围 | 结果 |
 |---|---|---|
-| 常规 | 1~100 | 100/100 通过 |
-| 最坏配置 | 1~40 | 40/40 通过 |
+| 常规 | 1~20 | 20/20 通过 |
+| 最坏配置 | 1~10 | 10/10 通过 |
 | CI 常规 job | 1~20 | 通过（自动化） |
 | CI 最坏配置 job | 1~10 | 通过（自动化） |
 | CI ASan job | 1~5 | 通过（自动化，Ubuntu） |
@@ -154,21 +154,27 @@ cppcheck --enable=warning,performance,portability --std=c99 \
 ### 2.3 覆盖率（gcovr，`--coverage -O0`，三目标全跑）
 
 ```
-moteos/mote.c                226 行  207 覆盖   91%   （未覆盖：mote_loop/mote_sleep 宿主不可达路径等）
-moteos/mote_mail.c            52 行   48 覆盖   92%   （未覆盖：参数校验分支）
-moteos/mote_task.c            41 行   39 覆盖   95%
-moteos/port/host/mote_port.h   9 行    9 覆盖  100%
-moteos/port/mote_port.c        2 行    0 覆盖    0%   ← 目标机分支（SysTick/wfi），由 QEMU 冒烟覆盖
-TOTAL                        330 行  303 覆盖   91.8%
+moteos/mote.c               494 行  456 覆盖   92%   （未覆盖：MOTE_DELAYED_MAX=0 分支、
+                                                        tick 回绕保护路径等）
+moteos/mote_mail.c           87 行   82 覆盖   94%   （未覆盖：参数校验分支）
+moteos/mote_task.c           41 行   39 覆盖   95%
+moteos/port/host/mote_port.h 17 行   17 覆盖  100%
+moteos/port/mote_port.c       8 行    4 覆盖   50%   ← 仅宿主分支参与编译；目标机分支
+                                                     （SysTick/tickless/wfi）由交叉编译
+                                                     + QEMU 冒烟覆盖
+TOTAL                       647 行  598 覆盖   92.4%
 ```
 
 ```
-lines:     91.8% (303/330)    ← CI 门槛 85%
-functions: 91.4% (32/35)
-branches:  80.2% (150/187)
+lines:     92.4% (598/647)    ← CI 门槛 85%
+functions: 92.8% (64/69)
+branches:  82.1% (335/408)
 ```
 
-### 2.4 静态分析（cppcheck 2.21.0）
+> gcovr 8.x 对多目标合并更严格（断言构建的 -include 会平移行号），
+> CI 命令已加 `--merge-mode-functions=separate` 避免误判。
+
+### 2.4 静态分析（cppcheck）
 
 ```
 Checking moteos/mote.c ... （含 MOTE_DELAYED_MAX=1 等配置变体）
@@ -194,20 +200,23 @@ handler 派发链路完整。整个过程 semihosting 无异常。
 
 | 目标 | 配置 | text | data+bss | 断言 |
 |---|---|---|---|---|
-| Cortex-M0+ | 默认，`-Os` | 1724 B | 280 B | CI：text <2560、RAM <512 ✅ |
-| Cortex-M0+ | 队列 255 / 延时 16，`-Os` | 1760 B | 2384 B | 仅编译（最坏配置体积仅记录） |
-| Cortex-M3 | 默认，无 `-Os` | 3548 B | 280 B | 仅编译 ✅ |
+| Cortex-M0+ | 默认，`-Os` | 2238 B | 280 B | CI：text <2560、RAM <512 ✅ |
+| Cortex-M0+ | 队列 255 / 延时 16，`-Os` | 2262 B | 2384 B | 仅编译（最坏配置体积仅记录） |
+| Cortex-M3 | 默认，无 `-Os` | 4469 B | 280 B | 仅编译 ✅ |
 | RV32IMC（青稞） | 默认，`-Os` | 约 2.0KB（2004 B） | 约 280 B | CI：text <2560、RAM <512 ✅ |
+| Cortex-M0+/M3/RV32 | `MOTE_TICKLESS=1`（port.o 增量） | +320~360 B（仅 port 层） | +12 B | 仅编译 ✅ |
 
 > M0+/M3 数字为本地实测；RV32 数字为 CI 交叉编译 job 实测记录
 > （本地无 RISC-V 工具链）。队列 255 配置的 RAM 2.3KB 是用户把队列开到
 > 极限的代价——内核本身不失控，但 `mote_event_post_replace` 的临界区
 > 时长也随队列长度线性增长（见 usage.md 附录 A 延迟预算）。
+> tickless 的体积增量只在 `mote_port.o`，不占内核三件套的预算。
 
 ### 2.7 集成编译（CI）
 
 - STM32F103 例程 + CMSIS_5 / cmsis-device-f1 真实头文件（钉提交）✅
 - CH32V003 例程 + WCH 官方 SDK 真实头文件（钉提交）✅
+- 以上两步均带 `-DMOTE_TICKLESS=1 -DMOTE_PORT_HCLK_HZ=...`（例程已启用 tickless）
 
 ---
 
@@ -217,16 +226,21 @@ handler 派发链路完整。整个过程 semihosting 无异常。
 
 | 宣称 | 证据 | 强度 |
 |---|---|---|
-| API 语义正确（队列/定时器/任务/邮箱） | 4524~7643 条断言全绿 | 强 |
+| API 语义正确（队列/定时器/任务/邮箱） | 4798~7929 条断言全绿 | 强 |
 | 周期定时器/任务无相位漂移 | 漂移回归测试（含迟到触发场景） | 强（逻辑层面） |
-| ms/period 边界运行时校验生效 | test_ms_bound / test_task_ms_bound | 强 |
-| 并发账目一致性（投递=派发+丢弃，邮箱无滞留，临界区不泄漏） | 交错测试 100 种子全绿 | 强（**对建模语义**） |
+| ms/period/policy 边界运行时校验生效 | test_ms_bound / test_task_ms_bound / test_policy_invalid | 强 |
+| deadline 计算与睡眠判定（next_due/sleep） | test_next_due / test_sleep_deadline | 强（逻辑层面） |
+| 并发账目一致性（投递=派发+丢弃，邮箱无滞留，临界区不泄漏） | 交错测试多种子全绿 | 强（**对建模语义**） |
 | 断言路径真实可编译、常规路径不触发断言 | test_moteos_assert 全绿 | 中（无负向触发用例，见局限 5） |
 | 内存安全/无 UB | ASan/UBSan（CI，Ubuntu） | 中（CI 环境，非板级） |
 | 启动链正确（向量表/SysTick/tick→定时器→事件流） | QEMU 冒烟（Cortex-M3） | 中（模拟器，非真硅片） |
-| 三内核可编译、默认配置体积受控 | 交叉编译 + 体积断言 | 强 |
-| 覆盖无大面积盲区 | 行覆盖 91.8%（门槛 85%） | 中 |
+| 三内核可编译、默认配置体积受控 | 交叉编译 + 体积断言（含 tickless 档） | 强 |
+| 覆盖无大面积盲区 | 行覆盖 92.4%（门槛 85%） | 中 |
 | 无静态分析告警 | cppcheck 0 告警 | 中 |
+
+> 注意：板级工程构建已实际抓到过 CI 漏掉的 bug（ch32v 临界区恢复的
+> 汇编操作数编号错误，见 CHANGELOG v0.5.0）——交叉编译/模拟器绿 ≠
+> 真机正确，本表"强"仅指逻辑层。
 
 ### 3.2 不能下的结论（诚实边界）
 
@@ -257,7 +271,7 @@ handler 派发链路完整。整个过程 semihosting 无异常。
 |---|---|
 | host-tests | `-Werror` 构建 + ctest 三目标 + 20/10 种子交错 |
 | sanitizers | ASan/UBSan 构建 + ctest + 5 种子 |
-| cross-compile | M0+(-Os+体积断言)/M3/RV32(-Os+体积断言) + 最坏配置构建 + STM32F103/CH32V003 真实 SDK 例程编译（钉 SDK 提交） |
+| cross-compile | M0+(-Os+体积断言)/M3/RV32(-Os+体积断言) + 最坏配置构建 + tickless 档（三架构 `MOTE_TICKLESS=1`）+ STM32F103/CH32V003 真实 SDK 例程编译（钉 SDK 提交，带 tickless 宏） |
 | qemu-smoke | 见第一节第 5 条 |
 | coverage | gcovr，行覆盖 <85% 判红 |
 | cppcheck | error 即失败 |

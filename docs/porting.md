@@ -194,17 +194,19 @@ moteos/port/ch32v/mote_port.h   ← 注意：RISC-V 用 ch32v 目录！
 ```c
 void SysTick_Handler(void)
 {
-    mote_tick();   /* ← 就加这一行 */
+    mote_tick();   /* ← 就加这一行（固定拍；tickless 工程按 4.3 协议
+                    *    调用 mote_tick_advance 并恢复固定拍重装） */
     // ...你原来的代码，比如 Delay_Dec() 之类
 }
 ```
 
 3. 如果想让空闲时省电，在你自己的 `mote_idle()` 里执行 wfi（不提供也行，
-   但低功耗卖点就没了）：
+   但低功耗卖点就没了）。注意签名带 deadline 入参：
 
 ```c
-void mote_idle(void)
+void mote_idle(uint32_t next_due)   /* next_due：内核给出的下一到期节拍 */
 {
+    (void)next_due;                 /* 固定拍直接忽略；tickless 见 4.3 */
     __WFI();   /* 你的芯片头文件自带 */
 }
 ```
@@ -216,7 +218,8 @@ void mote_idle(void)
 ```c
 while (1) {
     if (!mote_poll()) {
-        /* MoteOS 没事件可处理，做你自己的事 */
+        /* 没事件可处理。想省电就调 mote_sleep()（内核会判断
+         * 队列空且无到期项才真睡，见 4.2 的睡眠契约） */
     }
 }
 ```
@@ -474,9 +477,11 @@ handler 运行在主循环上下文，所以**全部 API 都能调**：`mote_eve
 
 **Q6：wfi 没省电？**
 用电流表测：空闲时电流应明显下降。没降？检查 `mote_idle()` 是不是真的执行了 wfi（有没有被强符号覆盖，见第 3 章）。
+想进一步省电（避免每 1ms 醒一次）：开 tickless（`MOTE_TICKLESS=1`），
+空闲时内核会把 SysTick 重装到下一 deadline 再睡，见 4.3 及其板级验证清单。
 
 **Q7：MOTE_TICK_MS 改成 10 会怎样？**
-tick 变成 10ms 一拍，`SysTick_Config(SystemCoreClock / (1000 / MOTE_TICK_MS))` 保持这个公式即可，定时器精度变粗但更省电。
+tick 变成 10ms 一拍，`SysTick_Config(SystemCoreClock / (1000 / MOTE_TICK_MS))` 保持这个公式即可，定时器精度变粗但更省电。tickless 模式下 deadline 计算也基于这一拍宽，无需额外处理。
 
 **Q8：事件 ID 可以不连续吗？**
 可以，但注册表是数组，ID 越大 Flash 浪费越多。建议枚举连续定义从 0 开始。
@@ -498,6 +503,7 @@ tick 变成 10ms 一拍，`SysTick_Config(SystemCoreClock / (1000 / MOTE_TICK_MS
 - [ ] LED 闪烁周期用逻辑分析仪/示波器实测 ≈ 设定值
 - [ ] **中断延迟实测**：DWT CYCCNT 或 GPIO 示波器测 `mote_mail_send` 最坏路径（方法见使用教程附录 A），确认符合你的延迟预算
 - [ ] **低功耗唤醒实测**（RISC-V 青稞必做）：空闲电流明显下降（wfi 生效）+ tick 准时唤醒、事件不睡过头
+- [ ] **tickless 专项**（若开启 `MOTE_TICKLESS=1`）：按 4.3 的 tickless 板级验证清单逐项实测（HCLK 换算、提前唤醒追平、计数器位宽、长睡功耗）
 - [ ] **周期相位实测**：示波器观察连续周期触发间隔，确认无累积漂移（尤其 handler 慢的场景）
 - [ ] 串口高波特率（115200 以上）连续收发不丢字
 - [ ] 空闲电流明显下降（wfi 生效）

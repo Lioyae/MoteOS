@@ -22,6 +22,7 @@
 | **post** | 投递 | 把事件放进队列的动作。不是"直接执行"，而是"放进筐里排队" |
 | **队列（queue）** | — | 先进先出的筐：先放进去的纸条先被处理 |
 | **tick** | 节拍 | 内核的心跳，每 `MOTE_TICK_MS`（默认 1ms）跳一次，由硬件定时器中断驱动 |
+| **tickless** | 无节拍空闲 | 低功耗模式：没事情时内核把 tick 定时器拨到"下一件到点的事"再睡，不再每 1ms 醒一次（配置 `MOTE_TICKLESS=1`，见移植教程） |
 | **注册表** | — | 一张对照表：事件编号 → 对应的 handler。内核靠它知道"纸条该给谁" |
 | **定时器（timer）** | — | 闹钟。到点自动投递一张纸条 |
 | **邮箱（mailbox）** | — | 快递柜。传递"一大块数据"（数组/结构体）用的 |
@@ -65,7 +66,9 @@ handler 干完活必须马上返回（毫秒级），控制权交回内核。
 - **事件（event）** = 一张纸条，写着"发生了什么事"
 - **handler** = 一个工人，专门处理某一类纸条
 - **post** = 把纸条塞进传达室门口的筐（队列）里
-- **主循环（mote_loop）** = 传达室大爷，不断从筐里拿纸条、看编号、喊对应工人来干
+- **主循环（mote_loop）** = 传达室大爷，不断从筐里拿纸条、看编号、喊对应工人来干；
+  筐空了、闹钟也没到点，他就眯一会儿（wfi 睡觉，tickless 模式下还会把
+  闹钟拨到最近一次"到点时刻"再睡）
 
 写 MoteOS 程序 = **只做三件事**：
 
@@ -563,9 +566,11 @@ static void step1(uint16_t evt, void *param, void *ctx)
 
 | API | 中断里 | handler/主循环里 |
 |---|---|---|
-| `mote_event_post*` | 可以 | 可以 |
+| `mote_event_post*`（含 `_delayed` / `_delayed_replace`） | 可以 | 可以 |
+| `mote_event_cancel_delayed` | 可以 | 可以 |
 | `mote_mail_send` | 可以 | 可以 |
-| `mote_tick` | 可以（移植层专用） | 可以 |
+| `mote_tick` / `mote_tick_advance` | 可以（移植层专用） | 可以 |
+| `mote_next_due` | 可以 | 可以 |
 | `mote_timer_start/stop/restart` | 不行 | 可以 |
 | `mote_task_start/stop` | 不行 | 可以 |
 | `mote_mail_recv` | 不行 | 可以 |
@@ -642,20 +647,27 @@ handler 里用 `evt` 参数区分是哪个纸条。
 中断延迟 ≈ 硬件中断响应时间 + tick 处理 + 内核临界区（取最长者）
 ```
 
-内核临界区时长取决于你的配置与主频，来源只有三处：
+内核临界区时长取决于你的配置与主频，来源（按最坏路径）：
 
 | 操作 | 临界区内做的事 | 规模 |
 |---|---|---|
 | `mote_event_post` | 队列入队 | O(1)，十几条指令 |
 | `mote_event_post_replace` | 从新到旧扫描队列找同 ID | O(队列长度)，最坏 = `MOTE_EVT_QUEUE_SIZE` |
+| `mote_event_post_delayed` / `_replace` / `mote_event_cancel_delayed` | 线性扫描延时槽池（找空槽/找同 ID） | O(`MOTE_DELAYED_MAX`) |
+| `mote_timer_start_ex` / `mote_timer_restart` | 排序链表插入（找插入点） | O(定时器数量)，几十个定时器仍很短 |
 | `mote_mail_send` | 拷贝 len 字节（≤ item_size）+ 事件入队 | O(len)，每 4 字节约几条指令 |
-| `mote_tick` | 关中断 + 自增 + 恢复 | 约 10 条指令 |
+| `mote_tick` / `mote_tick_advance` | 关中断 + 自增 + 恢复 | 约 10 条指令 |
+
+> 前四项是**中断可调用** API（中断延迟 = 中断响应 + 其中最长者）；
+> 定时器 API 虽仅限主循环，其临界区同样会延迟中断响应。
+> `mote_next_due` 与睡眠判定只发生在主循环/空闲路径，不计入中断延迟。
 
 **粗算公式**（48MHz 主频、-Os，按每字节 6~8 周期估算）：
 
 - 普通 post（队列 16）：约 30 周期 ≈ **1µs 以内**
 - 64 字节格子的邮箱 send：约 500 周期 ≈ **10µs 量级**
 - 队列 255 的 replace 全扫描：约 2500~4000 周期 ≈ **50~80µs 量级**
+- 延时槽 16 的槽池扫描：约 200~400 周期 ≈ **5~10µs 量级**
 
 **这些是估算值，实际值必须实测**（编译器版本、Flash 等待周期、流水线都会影响）。
 两种实测方法：
