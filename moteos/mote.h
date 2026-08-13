@@ -250,7 +250,8 @@ typedef struct {
  * 中断上下文可调用（拷贝成本与 len 成正比，计入中断延迟）。 */
 mote_status_t mote_mail_send(mote_mail_t *mb, const void *data, uint16_t len);
 /* 取最早一箱：返回实际存入的字节数（1..item_size），空箱返回 -1；
- * 邮箱字段非法同样返回 -1。仅限主循环上下文调用。 */
+ * 邮箱字段非法（含槽长度域被写坏为 0 或 >item_size）同样返回 -1。
+ * 仅限主循环上下文调用。 */
 int mote_mail_recv(mote_mail_t *mb, void *data);
 
 #endif

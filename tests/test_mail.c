@@ -209,6 +209,18 @@ static void test_invalid_mailbox_rejected(void)
     TEST_ASSERT(mote_mail_send(&bad, buf, 1) == MOTE_ERR_PARAM);
     TEST_ASSERT(mote_mail_recv(&bad, buf) == -1);
 
+    /* 槽长度域写坏：lens 值越界必须拒绝而不是按该长度越界读
+     * （lens 是随结构手工构造的内存，垃圾值不可信任） */
+    bad.buf = buf;
+    bad.slots = 2;
+    bad.item_size = 8;
+    bad.head = 0;
+    bad.count = 1;
+    lens[0] = 200; /* > item_size：越界读风险 */
+    TEST_ASSERT(mote_mail_recv(&bad, buf) == -1);
+    lens[0] = 0;   /* 0 同样非法 */
+    TEST_ASSERT(mote_mail_recv(&bad, buf) == -1);
+
     TEST_ASSERT(mote_mail_send(NULL, buf, 1) == MOTE_ERR_PARAM);
     TEST_ASSERT(mote_mail_recv(NULL, buf) == -1);
 }

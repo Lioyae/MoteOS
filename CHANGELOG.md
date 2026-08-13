@@ -39,12 +39,29 @@
   移植层 `mote_port.o` 分别设限（port text <512B、总 RAM <512B），移植层
   不再游离在断言之外；README/测试文档体积口径同步改写
 - **README 措辞**："零汇编"改为"无独立汇编文件（临界区/休眠为内联汇编）"
+- **邮箱 recv 长度域运行时校验（代码审查整改）**：手工构造邮箱的每槽长度
+  域（`lens`）被写坏为 0 或 >`item_size` 时，`mote_mail_recv` 此前会按该
+  长度拷贝、最多越界读 255 字节；现在与结构字段校验同口径，写坏即返回
+  -1 而不是崩溃，`mote.h` 契约文案同步
+- **QEMU 冒烟启动代码补 .data 拷贝（代码审查整改）**：`startup.c` 此前只
+  清零 .bss、不拷贝 .data——任何带初值的全局变量会静默取到错误值（当前
+  冒烟恰好没有 .data 而未暴露）；现在按链接脚本的 `_sdata/_edata/_etext`
+  完整拷贝
+- **CMake 对 MSVC 生成器给出明确指引（代码审查整改）**：宿主机测试依赖
+  C99 指定初始化器与 GCC 旗标（`-Wall/-Wextra/-Werror`、`-include`），
+  MSVC 下配置报 D8021 晦涩错误；现在配置期直接报错并提示 Windows 使用
+  MinGW 生成器
+- **仓库卫生（代码审查整改）**：`.gitignore` 构建目录匹配改 `build*/`、
+  新增 `*.exe`，忽略文档站依赖与站点输出（`moteos_docs/node_modules/`、
+  `moteos_docs/site/`）；恢复 `.github/workflows/build.yml` 中 CH32V003
+  SDK 钉 SHA 步骤注释行的乱码（按 git 历史还原原文）
 
 ### 测试
 
 - `test_timer`：`test_one_shot_survives_full_queue` 新增 RETRY 不计丢弃断言
 - `test_mail`：新增 `test_hook_reenter_same_mailbox`（钩子重入同一邮箱，
-  验证无残留、计数一致）
+  验证无残留、计数一致）；`test_invalid_mailbox_rejected` 新增槽长度域
+  写坏（0 / >item_size）必须返回 -1 的断言
 - **QEMU tickless 冒烟**（`tests/qemu/cm3/main_tickless.c`）：tickless 空闲
   路径首次被实际执行。QEMU 的 WFI 模型在"重装 SysTick 后立即 wfi"时产生
   伪唤醒（ptimer 重载事件唤醒被 halt 的 vCPU），深睡退化为微秒级轮询；

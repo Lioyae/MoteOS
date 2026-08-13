@@ -15,6 +15,9 @@ extern int main(void);
 extern void SysTick_Handler(void);
 
 extern uint32_t _estack;
+extern uint32_t _sdata;
+extern uint32_t _edata;
+extern uint32_t _etext;
 extern uint32_t _sbss;
 extern uint32_t _ebss;
 
@@ -28,7 +31,13 @@ static void default_handler(void)
 void reset_handler(void)
 {
     uint32_t *p;
+    const uint32_t *src;
 
+    /* .data 初始化值存于 FLASH（_etext 之后），拷贝到 RAM。
+     * 缺失此步时，任何带初值的全局变量会静默取到错误值 */
+    for (p = &_sdata, src = &_etext; p < &_edata; p++, src++) {
+        *p = *src;
+    }
     for (p = &_sbss; p < &_ebss; p++) {
         *p = 0;
     }

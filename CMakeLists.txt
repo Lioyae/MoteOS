@@ -6,6 +6,16 @@
 cmake_minimum_required(VERSION 3.16)
 project(moteos C)
 
+# 宿主机测试依赖 GCC 兼容编译器：C99 指定初始化器、-Wall/-Wextra/-Werror、
+# 断言构建的 -include 强制头均非 MSVC 语义（MSVC 下会报 D8021 等晦涩错误）。
+# Windows 请使用 MinGW 生成器：
+#   cmake -S . -B build -G "MinGW Makefiles"
+if(MSVC)
+    message(FATAL_ERROR
+        "MoteOS host tests require a GCC-compatible compiler. "
+        "On Windows, configure with: cmake -S . -B build -G \"MinGW Makefiles\"")
+endif()
+
 enable_testing()
 
 set(MOTEOS_TEST_SOURCES

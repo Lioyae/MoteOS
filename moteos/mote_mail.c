@@ -114,13 +114,20 @@ int mote_mail_recv(mote_mail_t *mb, void *data)
         n = -1; /* 结构被写坏：拒绝而不是越界读 */
     } else {
         n = mb->lens[mb->head]; /* 实际存入长度，不是整格 */
-        mote_copy(data, &mb->buf[mb->head * mb->item_size], (uint16_t)n);
-        if (mb->head + 1 >= mb->slots) {
-            mb->head = 0;
+        /* 每槽长度域校验：lens 是随邮箱结构一并手工构造的内存，
+         * 被写坏为 0 或 >item_size 时按该值拷贝会越界读——
+         * 与结构字段校验同口径，写坏即拒绝而不是崩溃 */
+        if (n < 1 || n > mb->item_size) {
+            n = -1;
         } else {
-            mb->head++;
+            mote_copy(data, &mb->buf[mb->head * mb->item_size], (uint16_t)n);
+            if (mb->head + 1 >= mb->slots) {
+                mb->head = 0;
+            } else {
+                mb->head++;
+            }
+            mb->count--;
         }
-        mb->count--;
     }
     mote_crit_exit(cs);
 
