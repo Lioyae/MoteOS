@@ -32,7 +32,7 @@
 临界区是否破坏调用方中断状态可在宿主机直接断言）。
 
 | 套件 | 覆盖点 |
-|---|---|---|
+|---|---|
 | `suite_queue` | post/派发、满队报错、replace 覆盖、越界 ID 安全丢弃、空 handler、丢弃计数、drop hook（含重入）、临界区嵌套 |
 | `suite_timer` | 单次/周期、handler 内自停、restart、tick 回绕、延时投递（含 replace/cancel）、满队三策略（RETRY/DROP/LATEST）、**相位稳定无漂移**、**ms 边界运行时校验**、**policy 越界运行时校验**、**排序链表触发顺序/重排**、**`mote_next_due` deadline 计算**、**`mote_sleep` 睡眠判定（宿主机 idle 观测）** |
 | `suite_task` | 周期触发、停止、槽池（随配置伸缩）、ctx 透传、**相位无漂移**、**period_ms 边界校验** |

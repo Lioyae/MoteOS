@@ -72,7 +72,7 @@ MoteOS 是面向小容量单片机（2KB RAM / 16KB Flash 级别）的 C99 事�
 ## 模块
 
 | 模块 | 说明 |
-|---|---|---|
+|---|---|
 | 事件队列 | `mote_event_post` / `mote_event_post_replace`（同 ID 只留最新）/ `mote_event_post_delayed`（含 `_replace` 与 `mote_event_cancel_delayed`）；内置丢弃计数 `mote_dropped_count()` |
 | 注册表 | C99 指定初始化器，事件 ID 即下标，O(1) 派发，表常驻 Flash |
 | 定时器 | 静态定义；32 位回绕安全；链表按到期时刻排序，到期扫描只遍历到期节点（poll 空转 O(1)）；周期定时器按绝对相位触发（错过拍合并追赶，无累积漂移）；满队策略可选：重试 / 丢弃（严格截止）/ 最新（replace 语义）——注意：**周期定时器满队时丢当次、下一拍正常；单次 RETRY 定时器满队时下一拍重试至送达（重试不计丢弃数、不触发钩子）** |

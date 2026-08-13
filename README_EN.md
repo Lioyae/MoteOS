@@ -72,7 +72,7 @@ MoteOS is a C99 event-driven cooperative kernel for small MCUs (2KB RAM / 16KB F
 ## Modules
 
 | Module | Description |
-|---|---|---|
+|---|---|
 | Event queue | `mote_event_post` / `mote_event_post_replace` (latest wins per ID) / `mote_event_post_delayed` (with `_replace` and `mote_event_cancel_delayed`); drop counter `mote_dropped_count()` |
 | Dispatch table | C99 designated initializers; event ID is the index; O(1) dispatch; table lives in Flash |
 | Timers | Statically defined; 32-bit wraparound safe; list sorted by due time so expiry scanning only visits due nodes (idle poll is O(1)); periodic timers fire on absolute phase (missed ticks coalesce, no cumulative drift); selectable full-queue policy: retry / drop (strict deadline) / latest (replace semantics) — note: **periodic timers drop the beat on a full queue and proceed next beat; one-shot RETRY timers retry on the next tick until delivered (retries do not count as drops or fire the drop hook)** |
