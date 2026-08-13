@@ -37,6 +37,12 @@
 #define MOTE_ENABLE_MAILBOX 1
 #endif
 
+/* 周期定时器/任务追赶上限：落后超过该拍数时放弃旧相位、从当前时刻
+ * 重新对齐（防御性上限，防止极端落后时推进循环过长） */
+#ifndef MOTE_TIMER_CATCHUP_MAX
+#define MOTE_TIMER_CATCHUP_MAX 1000
+#endif
+
 /* 断言钩子：内核内部不变量检查（生产环境可置空） */
 #ifndef MOTE_ASSERT
 #define MOTE_ASSERT(x) ((void)0)

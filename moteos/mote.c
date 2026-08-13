@@ -177,7 +177,11 @@ mote_status_t mote_event_post_replace(uint16_t evt, void *param)
 
 void mote_tick(void)
 {
+    /* 统一契约：s_tick 的一切访问都在临界区内完成（含本函数）。
+     * M0+ 上 32 位读改写非原子，依赖"关中断"保证与主循环侧读写互斥 */
+    mote_crit_state_t cs = mote_crit_enter();
     s_tick++;
+    mote_crit_exit(cs);
 }
 
 void mote_tick_set(uint32_t ticks)
@@ -231,13 +235,18 @@ mote_status_t mote_timer_start_ex(mote_timer_t *t, uint16_t evt, void *param,
                                   uint32_t ms, bool periodic,
                                   mote_timer_policy_t policy)
 {
-    if (t == NULL || ms == 0) {
+    mote_crit_state_t cs;
+
+    /* ms 上限运行时校验（此前仅靠默认关闭的 MOTE_ASSERT，生产构建会静默失效）：
+     * 回绕比较的数学边界，上限约 24.8 天 */
+    if (t == NULL || ms == 0 || ms >= 0x80000000u) {
         return MOTE_ERR_PARAM;
     }
-    MOTE_ASSERT(ms < 0x80000000u); /* 回绕比较的数学边界：上限约 24.8 天 */
     MOTE_ASSERT((uint8_t)policy <= MOTE_TIMER_POLICY_LATEST);
     mote_timer_stop(t); /* 重复 start 视为重启 */
+    cs = mote_crit_enter(); /* s_tick 由 tick 中断更新，读取必须关中断 */
     t->due = s_tick + ms;
+    mote_crit_exit(cs);
     t->period = periodic ? ms : 0;
     t->evt = evt;
     t->param = param;
@@ -258,13 +267,17 @@ mote_status_t mote_timer_stop(mote_timer_t *t)
 
 mote_status_t mote_timer_restart(mote_timer_t *t, uint32_t ms)
 {
-    if (t == NULL || ms == 0) {
+    mote_crit_state_t cs;
+
+    if (t == NULL || ms == 0 || ms >= 0x80000000u) {
         return MOTE_ERR_PARAM;
     }
     if (!mote_timer_linked(t)) {
         return MOTE_ERR_NOT_FOUND;
     }
+    cs = mote_crit_enter(); /* s_tick 由 tick 中断更新，读取必须关中断 */
     t->due = s_tick + ms;
+    mote_crit_exit(cs);
     if (t->period != 0) {
         t->period = ms;
     }
@@ -273,12 +286,16 @@ mote_status_t mote_timer_restart(mote_timer_t *t, uint32_t ms)
 
 mote_status_t mote_event_post_delayed(uint16_t evt, void *param, uint32_t ms)
 {
+    /* ms 上限运行时校验（回绕比较的数学边界，约 24.8 天）：
+     * 与定时器 API 同口径，不依赖可被关闭的 MOTE_ASSERT */
+    if (ms >= 0x80000000u) {
+        return MOTE_ERR_PARAM;
+    }
 #if MOTE_DELAYED_MAX > 0
     int free_slot = -1;
     mote_status_t st;
     mote_crit_state_t cs;
 
-    MOTE_ASSERT(ms < 0x80000000u); /* 回绕比较的数学边界：上限约 24.8 天 */
     cs = mote_crit_enter();
 
     for (int i = 0; i < MOTE_DELAYED_MAX; i++) {
@@ -317,17 +334,30 @@ mote_status_t mote_event_post_delayed(uint16_t evt, void *param, uint32_t ms)
 
 static void mote_process_timers(void)
 {
+    uint32_t now = mote_ticks(); /* 单一快照：M0+ 上裸读 32 位 s_tick 会撕裂 */
     mote_timer_t *t = s_timers;
 
     while (t != NULL) {
         mote_timer_t *next = t->next; /* 安全迭代：先缓存后继 */
-        if ((int32_t)(s_tick - t->due) >= 0) {
+        if ((int32_t)(now - t->due) >= 0) {
             if (t->period != 0) {
-                t->due = s_tick + t->period;
+                /* 相位稳定：due 按周期推进而不是"从现在重算"（due += period），
+                 * handler/主循环延迟不会造成相位逐周期累积漂移；
+                 * 错过多拍只合并投递一次（本拍），相位照旧；
+                 * 落后超过 MOTE_TIMER_CATCHUP_MAX 拍时放弃旧相位重新对齐，
+                 * 防止极端落后时的长循环 */
+                uint32_t n = 0;
+                do {
+                    t->due += t->period;
+                } while ((int32_t)(now - t->due) >= 0 &&
+                         ++n < MOTE_TIMER_CATCHUP_MAX);
+                if ((int32_t)(now - t->due) >= 0) {
+                    t->due = now + t->period;
+                }
                 if (t->policy == MOTE_TIMER_POLICY_LATEST) {
                     mote_event_post_replace(t->evt, t->param);
                 } else {
-                    /* 周期：RETRY/DROP 都等同丢当次（下一拍照常） */
+                    /* 周期：RETRY/DROP 都等同丢当次（下一拍正常） */
                     mote_event_post(t->evt, t->param);
                 }
             } else {
@@ -399,8 +429,9 @@ bool mote_poll(void)
                 return true;
             }
         }
-        /* 未注册/越界事件：安全丢弃并计数 */
-        MOTE_ASSERT(evt < s_evt_count);
+        /* 未注册/越界事件：安全丢弃并计数。
+         * 这是受支持的运行时行为（用户忘记登记 ID），不是内部不变量，
+         * 因此不设断言——断言构建下恶意/越界事件也必须走到这条丢弃路径 */
         cs = mote_crit_enter();
         mote_note_dropped(evt);
         mote_crit_exit(cs);

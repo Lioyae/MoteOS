@@ -219,6 +219,58 @@ static void test_latest_coalesces(void)
     mote_timer_stop(&t);
 }
 
+static void test_periodic_no_drift(void)
+{
+    static mote_timer_t t;
+
+    /* 相位稳定回归：主循环/处理延迟不得造成周期相位逐周期累积漂移
+     * （旧实现 due = now + period，迟到触发后相位永久后移） */
+    mote_init(table, 2);
+    s_calls = 0;
+    TEST_ASSERT(mote_timer_start(&t, 0, MOTE_P(0), 10, true) == MOTE_OK);
+    for (int i = 1; i <= 9; i++) {
+        mote_tick();
+        TEST_ASSERT(mote_poll() == false);
+    }
+    mote_tick();                      /* 第 10 拍 */
+    TEST_ASSERT(mote_poll() == true); /* 第一次到期 */
+    TEST_ASSERT(s_calls == 1);
+    /* 主循环繁忙：tick 走到第 23 拍才有机会 poll */
+    for (int i = 11; i <= 23; i++) {
+        mote_tick();
+    }
+    TEST_ASSERT(mote_poll() == true); /* 迟到触发（第 23 拍，不可避免） */
+    TEST_ASSERT(s_calls == 2);
+    /* 相位被保留：下一次到期仍是第 30 拍（旧实现会漂到第 33 拍） */
+    for (int i = 24; i <= 29; i++) {
+        mote_tick();
+        TEST_ASSERT(mote_poll() == false);
+    }
+    mote_tick();                      /* 第 30 拍 */
+    TEST_ASSERT(mote_poll() == true);
+    TEST_ASSERT(s_calls == 3);
+    mote_timer_stop(&t);
+}
+
+static void test_ms_bound(void)
+{
+    static mote_timer_t t;
+
+    /* 时长上限运行时校验：ms >= 2^31 必须返回 MOTE_ERR_PARAM，
+     * 不能依赖默认关闭的 MOTE_ASSERT（生产构建下会静默失效） */
+    mote_init(table, 2);
+    TEST_ASSERT(mote_timer_start(&t, 0, MOTE_P(0), 0x80000000u, false)
+                == MOTE_ERR_PARAM);
+    TEST_ASSERT(mote_event_post_delayed(0, MOTE_P(0), 0x80000000u)
+                == MOTE_ERR_PARAM);
+    TEST_ASSERT(mote_event_post_delayed(0, MOTE_P(0), 0x7FFFFFFFu) == MOTE_OK);
+    TEST_ASSERT(mote_timer_start(&t, 0, MOTE_P(0), 0x7FFFFFFFu, false)
+                == MOTE_OK);
+    TEST_ASSERT(mote_timer_restart(&t, 0x80000000u) == MOTE_ERR_PARAM);
+    TEST_ASSERT(mote_timer_restart(&t, 0x7FFFFFFFu) == MOTE_OK);
+    mote_timer_stop(&t);
+}
+
 void suite_timer(void)
 {
     test_timer_one_shot();
@@ -230,4 +282,6 @@ void suite_timer(void)
     test_one_shot_survives_full_queue();
     test_drop_policy_strict_deadline();
     test_latest_coalesces();
+    test_periodic_no_drift();
+    test_ms_bound();
 }

@@ -81,6 +81,8 @@ uint32_t mote_dropped_count(void);
  * 注意：① 在关中断上下文中被调用，必须极短；
  *      ② 钩子可能在中断上下文触发，只允许调用事件/邮箱类 API
  *         （mote_event_post*、mote_mail_send），禁止定时器/任务 API；
+ *         mote_mail_send 的拷贝成本（与 item_size 成正比）会叠加到
+ *         当前临界区时长上，大格子邮箱请勿在钩子内使用；
  *      ③ 钩子内再次触发的丢弃不会递归回调本钩子（防重入） */
 typedef void (*mote_drop_hook_t)(uint16_t evt);
 void mote_set_drop_hook(mote_drop_hook_t hook);
@@ -100,11 +102,13 @@ void mote_idle(void);
 
 mote_status_t mote_event_post(uint16_t evt, void *param);
 mote_status_t mote_event_post_replace(uint16_t evt, void *param);
+/* ms 上限 2^31-1（约 24.8 天，回绕比较的数学边界），超出返回 MOTE_ERR_PARAM */
 mote_status_t mote_event_post_delayed(uint16_t evt, void *param, uint32_t ms);
 
 /* 由移植层的中断服务程序调用，周期 = MOTE_TICK_MS。
  * 契约：只允许单一 tick 中断源调用（默认 SysTick）。
- * M0+ 上 32 位自增非原子，多个中断源并发调用会产生竞态 */
+ * 内核对时基 s_tick 的一切读写都在临界区内完成（本函数自带临界区），
+ * 与主循环/其它中断上下文并发均安全 */
 void mote_tick(void);
 
 /* 设置系统节拍（多用于测试与对时） */
@@ -113,7 +117,10 @@ void mote_tick_set(uint32_t ticks);
 uint32_t mote_ticks(void);
 
 /* 启动定时器（默认策略：单次=RETRY 至少一次送达，周期=DROP 满队丢当次）。
- * ms 上限 2^31-1（约 24.8 天，回绕比较的数学边界）。
+ * ms 上限 2^31-1（约 24.8 天，回绕比较的数学边界），0 或超限返回 MOTE_ERR_PARAM。
+ * 周期定时器按绝对相位触发：due 按周期推进（due += period），错过拍合并追赶，
+ * handler/主循环延迟不会造成相位逐周期累积漂移；落后超过
+ * MOTE_TIMER_CATCHUP_MAX（默认 1000 拍）时放弃旧相位重新对齐。
  * 需要严格截止时间（超时检测）用 mote_timer_start_ex + MOTE_TIMER_POLICY_DROP，
  * 或保持默认并在 handler 内核对 mote_ticks()。 */
 mote_status_t mote_timer_start(mote_timer_t *t, uint16_t evt, void *param,

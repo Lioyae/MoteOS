@@ -262,6 +262,12 @@ void mote_idle(void)
    > 只有"wfi 级"轻睡眠，才能拍胸脯说"不需要额外唤醒逻辑"；
    > 深睡模式这句话不成立。
 
+3. **青稞（CH32V）需板级确认**：标准 RISC-V 规范规定 MIE=0 时 wfi 不睡眠、
+   继续执行；而本移植关中断用的是青稞私有 INTSYSCR（CSR 0x800），
+   wfi 到底受不受它影响、pending 中断能否唤醒，WCH 文档未明确，
+   本仓库**没有任何板级验证**。上板后务必实测两项：空闲电流是否明显下降
+   （wfi 真的睡了）、tick 是否准时唤醒（没睡过头）。
+
 ### 4.3 临界区：四个小函数（保存/恢复式）
 
 新建 `mote_port.h`，提供四个接口：
@@ -445,7 +451,8 @@ tick 变成 10ms 一拍，`SysTick_Config(SystemCoreClock / (1000 / MOTE_TICK_MS
 `mote_event_post` 返回 `MOTE_ERR_FULL`，你可以重试或丢弃；状态类事件用 `mote_event_post_replace`（同 ID 只保留最新）。
 
 **Q10：handler 执行时间有没有上限？**
-协作式内核没有强制上限，全靠自觉（铁律 1）。实测经验值：48MHz 下 handler 1ms 内返回，系统 10ms 级事件都毫无压力。
+协作式内核没有强制上限，全靠自觉（铁律 1）。参考值（按指令条数估算，**无实测数据背书**）：
+48MHz 下 handler 控制在 1ms 内返回，10ms 级事件调度余量充足。请按第 7 章检查清单实测确认。
 
 ---
 
@@ -455,6 +462,9 @@ tick 变成 10ms 一拍，`SysTick_Config(SystemCoreClock / (1000 / MOTE_TICK_MS
 - [ ] 内核体积核对：map 文件里内核 text <2.5KB、RAM <512B（实测 RV32EC 2.0KB/280B，见 README）
 - [ ] map 文件里 `SysTick_Handler` 只出现一次（在 mote_port.o 里）
 - [ ] LED 闪烁周期用逻辑分析仪/示波器实测 ≈ 设定值
+- [ ] **中断延迟实测**：DWT CYCCNT 或 GPIO 示波器测 `mote_mail_send` 最坏路径（方法见使用教程附录 A），确认符合你的延迟预算
+- [ ] **低功耗唤醒实测**（RISC-V 青稞必做）：空闲电流明显下降（wfi 生效）+ tick 准时唤醒、事件不睡过头
+- [ ] **周期相位实测**：示波器观察连续周期触发间隔，确认无累积漂移（尤其 handler 慢的场景）
 - [ ] 串口高波特率（115200 以上）连续收发不丢字
 - [ ] 空闲电流明显下降（wfi 生效）
 - [ ] 重启 100 次无异常（看门狗场景下无卡死）

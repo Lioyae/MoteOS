@@ -89,22 +89,22 @@ static void test_task_stop(void)
 
 static void test_task_slot_pool(void)
 {
-    /* 槽数 = MOTE_TASK_SLOT_MAX；定义 6 个任务，同时活跃数不能超过槽数 */
-    static const mote_task_desc_t many[] = {
-        MOTE_TASK_DEF(10, tsk0, NULL),
-        MOTE_TASK_DEF(10, tsk0, NULL),
-        MOTE_TASK_DEF(10, tsk0, NULL),
-        MOTE_TASK_DEF(10, tsk0, NULL),
-        MOTE_TASK_DEF(10, tsk0, NULL),
-        MOTE_TASK_DEF(10, tsk0, NULL),
-    };
+    /* 槽数 = MOTE_TASK_SLOT_MAX：定义 MOTE_TASK_SLOT_MAX+2 个任务，
+     * 同时活跃数不能超过槽数（任务数随构建配置变化，不写死） */
+    static mote_task_desc_t many[MOTE_TASK_SLOT_MAX + 2];
+
+    for (uint16_t i = 0; i < MOTE_TASK_SLOT_MAX + 2; i++) {
+        many[i].handler = tsk0;
+        many[i].ctx = NULL;
+        many[i].period_ms = 10;
+    }
 
     mote_init(NULL, 0);
-    mote_task_init(many, 6);
+    mote_task_init(many, MOTE_TASK_SLOT_MAX + 2);
 
     int ok = 0;
-    for (int i = 0; i < 6; i++) {
-        if (mote_task_start((uint16_t)i) == MOTE_OK) {
+    for (uint16_t i = 0; i < MOTE_TASK_SLOT_MAX + 2; i++) {
+        if (mote_task_start(i) == MOTE_OK) {
             ok++;
         }
     }
@@ -112,7 +112,7 @@ static void test_task_slot_pool(void)
     TEST_ASSERT(mote_task_stop(0) == MOTE_OK);  /* 释放一个槽 */
     TEST_ASSERT(mote_task_start(0) == MOTE_OK); /* 重新启动被停止的 */
     TEST_ASSERT(mote_task_stop(0) == MOTE_OK);
-    TEST_ASSERT(mote_task_start(4) == MOTE_OK); /* 空槽可复用 */
+    TEST_ASSERT(mote_task_start(MOTE_TASK_SLOT_MAX) == MOTE_OK); /* 空槽可复用 */
 }
 
 static void test_task_ctx(void)
@@ -134,10 +134,41 @@ static void test_task_ctx(void)
     TEST_ASSERT(s_ctx_seen == &ctx_val);
 }
 
+static void test_task_no_drift(void)
+{
+    /* 相位稳定回归（与定时器同语义）：迟到执行后，
+     * 下一次执行仍在绝对相位上（旧实现 due = now + period 会漂移） */
+    mote_init(NULL, 0);
+    mote_task_init(tasks, 2); /* tasks[0] 周期 10ms */
+    s_calls0 = 0;
+    TEST_ASSERT(mote_task_start(0) == MOTE_OK);
+    for (int i = 1; i <= 10; i++) {
+        mote_tick();
+        mote_poll();
+    }
+    TEST_ASSERT(s_calls0 == 1); /* 第 10 拍首次执行 */
+    /* 主循环繁忙：第 11~23 拍无人 poll */
+    for (int i = 11; i <= 23; i++) {
+        mote_tick();
+    }
+    mote_poll();
+    TEST_ASSERT(s_calls0 == 2); /* 迟到执行（第 23 拍） */
+    for (int i = 24; i <= 29; i++) {
+        mote_tick();
+        mote_poll();
+    }
+    TEST_ASSERT(s_calls0 == 2);
+    mote_tick(); /* 第 30 拍：相位保留，准时执行（旧实现漂到 33 拍） */
+    mote_poll();
+    TEST_ASSERT(s_calls0 == 3);
+    TEST_ASSERT(mote_task_stop(0) == MOTE_OK);
+}
+
 void suite_task(void)
 {
     test_task_periodic();
     test_task_stop();
     test_task_slot_pool();
     test_task_ctx();
+    test_task_no_drift();
 }

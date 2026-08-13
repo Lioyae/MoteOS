@@ -68,7 +68,16 @@ void mote_process_tasks(void)
         mote_task_slot_t *s = &s_slots[i];
         if (s->active && (int32_t)(now - s->due) >= 0) {
             const mote_task_desc_t *d = &s_task_table[s->id];
-            s->due = now + d->period_ms;
+            /* 与定时器同语义：相位稳定推进（due += period），
+             * 落后超 MOTE_TIMER_CATCHUP_MAX 拍重建相位 */
+            uint32_t n = 0;
+            do {
+                s->due += d->period_ms;
+            } while ((int32_t)(now - s->due) >= 0 &&
+                     ++n < MOTE_TIMER_CATCHUP_MAX);
+            if ((int32_t)(now - s->due) >= 0) {
+                s->due = now + d->period_ms;
+            }
             d->handler(MOTE_EVT_TASK, NULL, d->ctx);
         }
     }

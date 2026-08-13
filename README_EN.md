@@ -39,7 +39,15 @@ MoteOS is a C99 event-driven cooperative kernel for small MCUs (2KB RAM / 16KB F
 
 - No assembly, no dynamic memory allocation, no blocking delay APIs
 - All RAM/Flash usage is fixed at compile time; CI cross-compiles and asserts kernel size
-- Supports ARM Cortex-M0+/M3 and RISC-V; interrupt latency = tick interrupt + microsecond critical sections of event enqueue / mailbox copy (proportional to mailbox item_size)
+- Supports ARM Cortex-M0+/M3 and RISC-V; interrupt latency = tick interrupt + kernel critical sections (event enqueue O(1); mailbox copy proportional to item_size; post_replace proportional to queue length). Critical-section duration depends on configuration and clock, and **must be measured per platform** (estimation formulas and measurement methods in the [usage guide appendix A](docs/usage.md))
+
+## Project Status (Important)
+
+**Development preview (v0.x), not board-verified.**
+
+- ✅ Verified: host unit/interleave tests (ASan/UBSan, multi-seed), assert-enabled build, worst-case config build (queue 255), M0+/M3/RV32 cross-compilation with size assertions, real-SDK example compilation — all automated by CI
+- ❌ Not verified: the kernel has never run on real silicon. Interrupt timing, measured critical-section duration, WFI low-power wakeup (including QingKe INTSYSCR/WFI interaction), and periodic-timer phase drift have no board-level measurements
+- ⚠️ Before production use, complete the board-level verification per the [porting checklist](docs/porting.md). The v1.0.x "production ready" tags have been retracted (see [CHANGELOG](CHANGELOG.md))
 
 ## Supported Platforms
 
@@ -50,13 +58,15 @@ MoteOS is a C99 event-driven cooperative kernel for small MCUs (2KB RAM / 16KB F
 | Cortex-M3 | STM32F103 |
 | x86 (host) | Runs kernel unit tests on PC |
 
+> Except for the host, all platforms above are **verified by cross-compilation only; never run on hardware**.
+
 ## Resource Usage
 
-| Item | Usage (measured, -Os) |
+| Item | Usage |
 |---|---|
-| Kernel Flash | RV32EC ~2.0KB (2004B), Cortex-M0+ ~1.2KB (1236B); CI asserts <2.5KB |
-| Kernel RAM | ~280B (event queue 16 slots + delayed 4 + task slots 4); CI asserts <512B |
-| Full blink example | Measured on CH32V003: FLASH 2.7KB / RAM 712B (including startup and stack) |
+| Kernel Flash | RV32EC ~2.0KB, Cortex-M0+ ~1.2KB (CI cross-compiles the three kernel .o at -Os; asserts <2.5KB) |
+| Kernel RAM | ~280B with default config (event queue 16 slots + delayed 4 + task slots 4); CI asserts <512B |
+| Full blink example | Manually measured on CH32V003: FLASH 2.7KB / RAM 712B (including startup and stack; **example size is not CI-asserted**). Note: 712B is 35% of a 2KB RAM — the rest must cover app data and stack |
 
 ## Modules
 
@@ -64,10 +74,10 @@ MoteOS is a C99 event-driven cooperative kernel for small MCUs (2KB RAM / 16KB F
 |---|---|
 | Event queue | `mote_event_post` / `mote_event_post_replace` (latest wins per ID) / `mote_event_post_delayed`; drop counter `mote_dropped_count()` |
 | Dispatch table | C99 designated initializers; event ID is the index; O(1) dispatch; table lives in Flash |
-| Timers | Statically defined; 32-bit wraparound safe; selectable full-queue policy: retry (default, at-least-once) / drop (strict deadline) / latest (replace semantics) |
-| Task layer | Periodic-callback convenience layer: descriptors in Flash (handler + ctx + period), state slot pool in RAM; inactive tasks consume no RAM (optional) |
-| Mailbox | Static slots with deep copy; slot insert and event enqueue are atomic within one critical section (all-or-nothing, no race window) (optional) |
-| Low power | Enters `mote_idle()` (wfi by default) when idle; woken by the tick interrupt |
+| Timers | Statically defined; 32-bit wraparound safe; periodic timers fire on absolute phase (missed ticks coalesce, no cumulative drift); selectable full-queue policy: retry (default, at-least-once) / drop (strict deadline) / latest (replace semantics) |
+| Task layer | Periodic-callback convenience layer: descriptors in Flash (handler + ctx + period), state slot pool in RAM; inactive tasks consume no RAM (optional). Note: **not RTOS tasks** — no preemption, handlers are called synchronously by the main loop, unrelated to the event queue |
+| Mailbox | Static slots with deep copy; slot insert and event enqueue are atomic within one critical section (all-or-nothing, no race window); critical-section duration is proportional to item_size (optional) |
+| Low power | Enters `mote_idle()` (wfi by default) when idle; woken by the tick interrupt. Race handling is correct by reasoning, but **WFI behavior on each chip (especially QingKe) is not board-verified** |
 | Critical section | Save/restore style (PRIMASK / INTSYSCR), nesting-safe |
 | Observability | `mote_dropped_count()` unified drop counter + `mote_set_drop_hook()` drop callback (event/mailbox APIs only inside the hook) |
 
@@ -126,13 +136,15 @@ All tunables live in `moteos/mote_config.h`:
 
 ## Build and Test
 
-The kernel is pure logic; unit tests run on PC:
+The kernel is pure logic; unit tests run on PC (`ctest` runs three builds by default: regular config, assert-enabled `test_moteos_assert`, and worst-case `test_moteos_max` — queue 255 / delayed 16 / task slots 16):
 
 ```bash
 cmake -G "MinGW Makefiles" -S . -B build
 cmake --build build
 ctest --test-dir build --output-on-failure
 ```
+
+> The interleave tests verify the kernel's consistency against a **modeled concurrency semantics** (no preemption inside critical sections); they do not constitute hardware verification. Real hardware timing must be verified on the board (see Project Status above).
 
 ## Directory Structure
 

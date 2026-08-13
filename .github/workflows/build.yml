@@ -23,11 +23,14 @@ jobs:
       - name: Build
         run: cmake --build build
 
-      - name: Test (unit + multi-seed interleave)
+      - name: Test (unit + assert build + worst-case build + multi-seed interleave)
         run: |
           ctest --test-dir build --output-on-failure
           for i in $(seq 1 20); do
             MOTE_TEST_SEED=$i ./build/test_moteos || exit 1
+          done
+          for i in $(seq 1 10); do
+            MOTE_TEST_SEED=$i ./build/test_moteos_max || exit 1
           done
 
   sanitizers:
@@ -81,6 +84,15 @@ jobs:
             -Imoteos -Imoteos/port/cm3 -Itests/stubs
           rm -f *.o
 
+      - name: Compile Cortex-M0+ worst-case config (queue 255, delayed 16)
+        run: |
+          arm-none-eabi-gcc -std=c99 -Wall -Wextra -Werror -Os -mcpu=cortex-m0plus -mthumb \
+            -DMOTE_EVT_QUEUE_SIZE=255 -DMOTE_DELAYED_MAX=16 \
+            -c moteos/mote.c moteos/mote_task.c moteos/mote_mail.c moteos/port/mote_port.c \
+            -Imoteos -Imoteos/port/cm0plus -Itests/stubs
+          arm-none-eabi-size -t mote.o mote_task.o mote_mail.o
+          rm -f *.o
+
       - name: Compile RISC-V RV32 (WCH QingKe, -Os, size check)
         run: |
           riscv-none-elf-gcc -std=c99 -Wall -Wextra -Werror -Os -march=rv32imc_zicsr -mabi=ilp32 \
@@ -92,6 +104,15 @@ jobs:
           echo "rv32 kernel: text=${TEXT}B ram=${RAM}B"
           test "$TEXT" -lt 2560 || { echo "kernel text too large"; exit 1; }
           test "$RAM" -lt 512 || { echo "kernel ram too large"; exit 1; }
+          rm -f *.o
+
+      - name: Compile RISC-V RV32 worst-case config (queue 255, delayed 16)
+        run: |
+          riscv-none-elf-gcc -std=c99 -Wall -Wextra -Werror -Os -march=rv32imc_zicsr -mabi=ilp32 \
+            -DMOTE_EVT_QUEUE_SIZE=255 -DMOTE_DELAYED_MAX=16 \
+            -c moteos/mote.c moteos/mote_task.c moteos/mote_mail.c moteos/port/mote_port.c \
+            -Imoteos -Imoteos/port/ch32v -Itests/stubs
+          riscv-none-elf-size -t mote.o mote_task.o mote_mail.o
           rm -f *.o
 
       - name: Compile STM32F103 example against real CMSIS/ST headers
