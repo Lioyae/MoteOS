@@ -103,7 +103,7 @@ moteos/port/cm3/mote_port.h  ← 你的芯片对应 port 头文件，必须
 | 报错信息 | 原因 | 怎么改 |
 |---|---|---|
 | `cannot open source input file "mote.h"` | 头文件路径没加或加错 | 回 1.4 检查三条路径 |
-| `SysTick_Handler multiply defined` | 你的工程里已有 SysTick_Handler（startup 文件里是**弱符号**不会冲突；报这个说明哪里又定义了一个） | 删掉你自己写的那个 SysTick_Handler，tick 交给 MoteOS |
+| `SysTick_Handler multiply defined` | 你的工程里有**两个强符号** SysTick_Handler（MoteOS 的是弱符号，不会引发此报错） | 只保留一个：要么用你自己的并在里面调 `mote_tick()`（见第 3 章），要么删掉自己的交给 MoteOS |
 | `'NULL' undeclared` | 老版本 mote.h 缺 `<stddef.h>` | 更新 MoteOS 到最新（已修复） |
 | `USART1_IRQHandler multiply defined` | 你的代码里也写了串口中断函数 | 二选一：删掉其中一个，或把 `mote_mail_send` 加进你自己的 USART1_IRQHandler 里 |
 | `GPIO_CNF_... undeclared` | 你用的库没有 ST 老版寄存器宏 | 用你 SDK 自带的外设库函数写初始化（参考第 5 章） |
@@ -185,10 +185,11 @@ moteos/port/ch32v/mote_port.h   ← 注意：RISC-V 用 ch32v 目录！
 
 ## 第 3 章：已有工程怎么接入（不动你的 SysTick）
 
-如果你的工程已经跑起来了（有自己的 SysTick、延时函数、外设库），不想被 MoteOS 接管 SysTick：
+如果你的工程已经跑起来了（有自己的 SysTick、延时函数、外设库），想保留自己的 SysTick：
 
-1. **不要**把 `mote_port.c` 加进工程
-2. 在你的 SysTick 中断函数（一般在 `stm32f10x_it.c` 或 `main.c`）里加一行：
+1. `mote_port.c` **照常加入工程**——它的 `SysTick_Handler` 是**弱符号**，
+   你自己的强符号 `SysTick_Handler` 会直接覆盖它，链接不报冲突
+2. 在你自己的 SysTick 中断函数（一般在 `stm32f10x_it.c` 或 `main.c`）里加一行：
 
 ```c
 void SysTick_Handler(void)
@@ -198,7 +199,8 @@ void SysTick_Handler(void)
 }
 ```
 
-3. 在你的 main.c 里补一个 `mote_idle`：
+3. 如果想让空闲时省电，在你自己的 `mote_idle()` 里执行 wfi（不提供也行，
+   但低功耗卖点就没了）：
 
 ```c
 void mote_idle(void)

@@ -85,6 +85,8 @@ uint32_t mote_dropped_count(void);
  *         当前临界区时长上，大格子邮箱请勿在钩子内使用；
  *      ③ 钩子内再次触发的丢弃不会递归回调本钩子（防重入） */
 typedef void (*mote_drop_hook_t)(uint16_t evt);
+/* 注册/替换丢事件钩子（内部带临界区，任意上下文调用均安全；
+ * 推荐仅在启动时调用一次）。传 NULL 取消。 */
 void mote_set_drop_hook(mote_drop_hook_t hook);
 
 /* 主循环单步：处理定时器/任务，分发一个事件；返回是否分发了事件 */
@@ -102,7 +104,8 @@ void mote_idle(void);
 
 mote_status_t mote_event_post(uint16_t evt, void *param);
 mote_status_t mote_event_post_replace(uint16_t evt, void *param);
-/* ms 上限 2^31-1（约 24.8 天，回绕比较的数学边界），超出返回 MOTE_ERR_PARAM */
+/* ms 上限 2^31-1（约 24.8 天，回绕比较的数学边界）；ms==0 或超限返回
+ * MOTE_ERR_PARAM（0 延时语义含糊，直接拒绝，与定时器 API 同口径） */
 mote_status_t mote_event_post_delayed(uint16_t evt, void *param, uint32_t ms);
 
 /* 由移植层的中断服务程序调用，周期 = MOTE_TICK_MS。
@@ -142,9 +145,21 @@ void mote_note_dropped(uint16_t evt);
 
 /* ---- 测试注入（仅定义 MOTE_TEST_INJECT_ENABLE 时可用）：
  *      宿主机交错测试在 API 内部窗口插入"伪中断"执行点，
- *      发布构建不编译、零开销 ---- */
+ *      发布构建不编译、零开销。
+ *      注入窗口：mote_event_post*、mote_mail_send（入临界区前）、
+ *      mote_poll 单步前、mote_process_timers 列表遍历中 ---- */
 #ifdef MOTE_TEST_INJECT_ENABLE
+extern void (*s_test_inject)(void);
 void mote_test_inject_set(void (*fn)(void));
+/* do-while 形式：避免三元 void 分支（GCC 扩展），-pedantic 兼容 */
+#define MOTE_TEST_INJECT()                                                     \
+    do {                                                                       \
+        if (s_test_inject != NULL) {                                           \
+            s_test_inject();                                                   \
+        }                                                                      \
+    } while (0)
+#else
+#define MOTE_TEST_INJECT() ((void)0)
 #endif
 
 #if MOTE_ENABLE_TASK
@@ -157,6 +172,8 @@ typedef struct {
 #define MOTE_TASK_DEF(period_ms, handler, ctx) { (handler), (ctx), (period_ms) }
 
 void mote_task_init(const mote_task_desc_t *table, uint16_t count);
+/* 启动任务；描述符 period_ms 为 0 或 ≥2^31 时返回 MOTE_ERR_PARAM
+ * （0 会退化为每 poll 同步调用，≥2^31 破坏回绕比较数学） */
 mote_status_t mote_task_start(uint16_t id);
 mote_status_t mote_task_stop(uint16_t id);
 

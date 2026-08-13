@@ -178,6 +178,7 @@ mote_event_post_delayed(EVT_LED, NULL, 100);   /* 100ms 后再把纸条放进筐
 ```
 
 适合"延迟关屏""开机 3 秒后自检"。同时最多 `MOTE_DELAYED_MAX`（默认 4）张在路上，超了返回 `MOTE_ERR_FULL`。
+`ms` 传 0 或 ≥2^31（约 24.8 天）返回 `MOTE_ERR_PARAM`（与定时器同口径的运行时校验）。
 
 ### 2.4 纸条上带东西：MOTE_P / MOTE_U32
 
@@ -395,6 +396,10 @@ int main(void)
 **槽位池**：`MOTE_TASK_SLOT_MAX`（默认 4）= 同时上班的任务上限。
 名单可以写 20 个任务，但同时只能有 4 个在打卡（第 5 个 `mote_task_start` 返回 `MOTE_ERR_FULL`）。
 停掉一个就能再开一个。任务 handler 收到的 evt 固定是 `MOTE_EVT_TASK`（内核专用编号）。
+
+**周期校验**：描述符 `period_ms` 为 0 或 ≥2^31（约 24.8 天）的任务无法启动，
+`mote_task_start` 返回 `MOTE_ERR_PARAM`（运行时校验，与定时器同口径）。
+0 周期会退化成"每 poll 直接喊一次 handler"，等同忙循环，别想钻空子。
 
 ---
 
@@ -640,3 +645,81 @@ handler 里用 `evt` 参数区分是哪个纸条。
 3. 大块数据改走"指针 + 所有权移交"（自己保证生命周期，不拷贝）
 
 > 本内核**没有任何官方板级实测数据**，使用前请自行测量并在你的预算内做决定。
+
+---
+
+## 附录 B：非阻塞串口发送（正反例对照）
+
+铁律 1 说 handler 必须毫秒级返回，但"发一串数据"天然是慢操作。三种写法的对比
+（115200 波特率 = 每字节约 87µs）：
+
+**反面教材一：handler 里等 TC（传输完成）**
+
+```c
+for (int i = 0; i < n; i++) {
+    while (!(USART1->SR & USART_SR_TC)) { }  /* 等整个字节从引脚发完！ */
+    USART1->DR = buf[i];
+}
+```
+
+32 字节回环 = handler 阻塞约 2.8ms。数据一多直接违反铁律 1，
+主循环饿死、其他 handler 排队。**这是早期例程踩过的坑，现在已修正。**
+
+**反面教材二：handler 里等 TXE（稍好，仍不推荐）**
+
+```c
+for (int i = 0; i < n; i++) {
+    while (!(USART1->SR & USART_SR_TXE)) { }  /* 只等 0~1 个字节时间 */
+    USART1->DR = buf[i];
+}
+```
+
+每字节最多等 87µs，32 字节最多约 2.8ms 的最坏情况仍然存在（只是常数变小）。
+例程里用这种写法并标注了"生产代码请改发送中断"，因为例程要短。
+你自己写代码，请用下面这种：
+
+**正确姿势：环形缓冲 + TXE 发送中断（handler 零忙等）**
+
+```c
+/* 1. 全局：环形缓冲（容量按你的最坏突发决定） */
+#define TX_BUF_SIZE 64
+static uint8_t tx_buf[TX_BUF_SIZE];
+static volatile uint16_t tx_head;   /* 中断写 */
+static volatile uint16_t tx_tail;   /* 主循环写 */
+static bool tx_active;
+
+/* 2. 主循环/handler 里：数据丢进缓冲，开 TXE 中断，立即返回 */
+static void uart_send(const uint8_t *data, uint16_t len)
+{
+    for (uint16_t i = 0; i < len; i++) {
+        uint16_t next = (uint16_t)((tx_tail + 1) % TX_BUF_SIZE);
+        if (next == tx_head) {
+            /* 满：丢数据/记日志，绝不等待 */
+            return;
+        }
+        tx_buf[tx_tail] = data[i];
+        tx_tail = next;
+    }
+    USART1->CR1 |= USART_CR1_TXEIE;  /* 开发送中断 */
+}
+
+/* 3. 中断里：搬一个字节；搬空了关中断 */
+void USART1_IRQHandler(void)
+{
+    if (USART1->SR & USART_SR_TXE && (USART1->CR1 & USART_CR1_TXEIE)) {
+        if (tx_head != tx_tail) {
+            USART1->DR = tx_buf[tx_head];
+            tx_head = (uint16_t)((tx_head + 1) % TX_BUF_SIZE);
+        } else {
+            USART1->CR1 &= ~USART_CR1_TXEIE;  /* 发完，关中断省电 */
+        }
+    }
+    if (USART1->SR & USART_SR_RXNE) {
+        uint8_t c = (uint8_t)USART1->DR;
+        mote_mail_send(&uart_mb, &c, 1);      /* 接收仍走邮箱 */
+    }
+}
+```
+
+handler 里调 `uart_send()` 只是几个字节的 memcpy 级操作，永远毫秒级返回——
+这才是"无阻塞延时 API"哲学在串口上的正确打开方式。

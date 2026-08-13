@@ -50,6 +50,8 @@ mote_status_t mote_mail_send(mote_mail_t *mb, const void *data, uint16_t len)
         return MOTE_ERR_PARAM;
     }
 
+    MOTE_TEST_INJECT(); /* 交错测试窗口：入临界区前伪中断可插入 */
+
     /* 入箱与事件入队必须在同一个临界区内完成：
      * 中断不可能插进拷贝与入队之间，回滚也是原子的，
      * 杜绝"数据已入箱但事件没送达"与"回滚挤掉他人数据"两类竞态 */

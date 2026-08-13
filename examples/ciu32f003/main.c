@@ -56,6 +56,9 @@ static void uart_handler(uint16_t evt, void *param, void *ctx)
     uint8_t buf[32];
     int n;
 
+    /* 等 TXE（数据寄存器空）只等 0~1 个字节时间，handler 不会长阻塞。
+     * ⚠ 更严谨的姿势是"环形缓冲 + TXE 发送中断"状态机
+     * （见 docs/usage.md 附录 B），handler 完全不碰忙等 */
     while ((n = mote_mail_recv(mb, buf)) > 0) {
         for (int i = 0; i < n; i++) {
             while (!(UART1->ISR & UART_FLAG_TXE)) { }

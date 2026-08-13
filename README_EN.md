@@ -45,7 +45,7 @@ MoteOS is a C99 event-driven cooperative kernel for small MCUs (2KB RAM / 16KB F
 
 **Development preview (v0.x), not board-verified.**
 
-- ✅ Verified: host unit/interleave tests (ASan/UBSan, multi-seed), assert-enabled build, worst-case config build (queue 255), M0+/M3/RV32 cross-compilation with size assertions, real-SDK example compilation — all automated by CI
+- ✅ Verified: host unit/interleave tests (ASan/UBSan, multi-seed), assert-enabled build, worst-case config build (queue 255), **QEMU smoke test** (Cortex-M3: boot/vector table/SysTick/tick→timer→event flow), **gcov coverage gate (≥85% lines)**, **cppcheck static analysis**, M0+/M3/RV32 cross-compilation with size assertions, real-SDK example compilation — all automated by CI
 - ❌ Not verified: the kernel has never run on real silicon. Interrupt timing, measured critical-section duration, WFI low-power wakeup (including QingKe INTSYSCR/WFI interaction), and periodic-timer phase drift have no board-level measurements
 - ⚠️ Before production use, complete the board-level verification per the [porting checklist](docs/porting.md). The v1.0.x "production ready" tags have been retracted (see [CHANGELOG](CHANGELOG.md))
 
@@ -144,7 +144,7 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-> The interleave tests verify the kernel's consistency against a **modeled concurrency semantics** (no preemption inside critical sections); they do not constitute hardware verification. Real hardware timing must be verified on the board (see Project Status above).
+> The interleave tests verify the kernel's consistency against a **modeled concurrency semantics** (no preemption inside critical sections); pseudo-interrupt injection windows cover `mote_event_post*` / `mote_mail_send` (before critical section) / `mote_poll` (before each step) / `mote_process_timers` (during list traversal). They do not constitute hardware verification; real hardware timing must be verified on the board (see Project Status above).
 
 ## Directory Structure
 

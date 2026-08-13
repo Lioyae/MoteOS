@@ -256,10 +256,14 @@ static void test_ms_bound(void)
 {
     static mote_timer_t t;
 
-    /* 时长上限运行时校验：ms >= 2^31 必须返回 MOTE_ERR_PARAM，
+    /* 时长运行时校验：ms==0 与 ms>=2^31 必须返回 MOTE_ERR_PARAM，
      * 不能依赖默认关闭的 MOTE_ASSERT（生产构建下会静默失效） */
     mote_init(table, 2);
+    TEST_ASSERT(mote_timer_start(&t, 0, MOTE_P(0), 0, false)
+                == MOTE_ERR_PARAM);
     TEST_ASSERT(mote_timer_start(&t, 0, MOTE_P(0), 0x80000000u, false)
+                == MOTE_ERR_PARAM);
+    TEST_ASSERT(mote_event_post_delayed(0, MOTE_P(0), 0)
                 == MOTE_ERR_PARAM);
     TEST_ASSERT(mote_event_post_delayed(0, MOTE_P(0), 0x80000000u)
                 == MOTE_ERR_PARAM);
@@ -267,6 +271,7 @@ static void test_ms_bound(void)
     TEST_ASSERT(mote_timer_start(&t, 0, MOTE_P(0), 0x7FFFFFFFu, false)
                 == MOTE_OK);
     TEST_ASSERT(mote_timer_restart(&t, 0x80000000u) == MOTE_ERR_PARAM);
+    TEST_ASSERT(mote_timer_restart(&t, 0) == MOTE_ERR_PARAM);
     TEST_ASSERT(mote_timer_restart(&t, 0x7FFFFFFFu) == MOTE_OK);
     mote_timer_stop(&t);
 }

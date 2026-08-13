@@ -164,6 +164,25 @@ static void test_task_no_drift(void)
     TEST_ASSERT(mote_task_stop(0) == MOTE_OK);
 }
 
+static void test_task_ms_bound(void)
+{
+    /* 与定时器同口径的周期运行时校验：
+     * period_ms==0 会退化为每 poll 同步调用（与 spin 无异）；
+     * period_ms≥2^31 破坏回绕比较数学。此前仅靠默认关闭的断言 */
+    static const mote_task_desc_t bad[] = {
+        MOTE_TASK_DEF(0, tsk0, NULL),            /* 0：拒绝 */
+        MOTE_TASK_DEF(0x80000000u, tsk0, NULL),  /* ≥2^31：拒绝 */
+        MOTE_TASK_DEF(0x7FFFFFFFu, tsk0, NULL),  /* 上限内：接受 */
+    };
+
+    mote_init(NULL, 0);
+    mote_task_init(bad, 3);
+    TEST_ASSERT(mote_task_start(0) == MOTE_ERR_PARAM);
+    TEST_ASSERT(mote_task_start(1) == MOTE_ERR_PARAM);
+    TEST_ASSERT(mote_task_start(2) == MOTE_OK);
+    TEST_ASSERT(mote_task_stop(2) == MOTE_OK);
+}
+
 void suite_task(void)
 {
     test_task_periodic();
@@ -171,4 +190,5 @@ void suite_task(void)
     test_task_slot_pool();
     test_task_ctx();
     test_task_no_drift();
+    test_task_ms_bound();
 }

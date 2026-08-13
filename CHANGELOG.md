@@ -1,5 +1,38 @@
 # 更新日志
 
+## v0.4.1 - 2026-08-13（开发预览）
+
+### 修复
+
+- **例程违反铁律 1**（P1）：三份例程的 UART 回环由"等 TC（传输完成，
+  32 字节阻塞约 2.8ms）"改为"等 TXE（数据寄存器空，0~1 字节时间）"，
+  并加注释指向"环形缓冲 + 发送中断"的正确姿势；使用教程新增
+  「附录 B：非阻塞串口发送」正反例对照
+- **任务层周期校验对齐定时器**（P1 漏网）：`mote_task_start` 对
+  `period_ms==0 / ≥2^31` 运行时返回 `MOTE_ERR_PARAM`（此前仅靠默认关闭的
+  断言，0 周期会退化为每 poll 同步调用、与 spin 无异）；
+  `mote_event_post_delayed` 补拒绝 `ms==0`（口径与定时器统一）
+- `mote_set_drop_hook` 赋值包临界区（钩子可能在中断上下文被读取/调用），
+  契约成文（推荐启动时调用一次）
+- **SysTick_Handler 改弱符号**（`MOTE_WEAK`，兼容 GCC/ArmClang/armcc）：
+  已有 SysTick 的工程直接重定义强符号即可接管，无需剔除 mote_port.c；
+  移植教程第 3 章与报错表同步简化
+
+### 测试 / CI
+
+- **交错测试注入窗口扩展**：`mote_mail_send`（入临界区前，覆盖入箱回滚
+  竞态）、`mote_poll`（单步前）、`mote_process_timers`（定时器列表遍历中）；
+  伪中断新增 `mote_tick` 模拟 + 周期定时器，让 process_timers 窗口被真实
+  驱动（总账等式扩展为"显式尝试 + 定时器触发 = 派发 + 丢弃"，并断言
+  定时器触发数显著大于 0）
+- **QEMU 冒烟测试**（`tests/qemu/cm3`，CI 新 job）：stm32vldiscovery
+  （Cortex-M3）上验证启动、向量表、SysTick、tick→定时器→事件流；
+  semihosting 打印 QEMU_PASS/QEMU_FAIL + CI 关键字判定（退出码跨平台
+  透传不可靠，不依赖）；向量表断掉则死循环被 timeout 判失败
+- **CI 新增三 job**：`qemu-smoke`、`coverage`（gcovr，行覆盖 ≥85% 门槛）、
+  `cppcheck`（warning/performance/portability，error 即失败）
+- 新增 `test_task_ms_bound`；`test_ms_bound` 补 `ms==0` 用例
+
 ## v0.4.0 - 2026-08-13（开发预览）
 
 > **版本回退说明**：v1.0.0/v1.0.1 标签已撤销——"生产就绪"宣称撤回：

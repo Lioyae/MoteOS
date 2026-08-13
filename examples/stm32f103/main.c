@@ -56,9 +56,15 @@ static void uart_handler(uint16_t evt, void *param, void *ctx)
     uint8_t buf[32];
     int n;
 
+    /* 注意：这里等 TXE（数据寄存器空）即可——上一字节从 DR 搬进移位寄存器
+     * 后就能写下一字节，只等 0~1 个字节时间。
+     * ⚠ 不要等 TC（传输完成）：那要等整个字节从引脚发完，32 字节回环会
+     * 阻塞约 2.8ms，违反铁律 1（handler 毫秒级返回）。
+     * 更严谨的姿势是"环形缓冲 + TXE 发送中断"状态机（见 docs/usage.md
+     * 附录 B），handler 完全不碰忙等 */
     while ((n = mote_mail_recv(mb, buf)) > 0) {
         for (int i = 0; i < n; i++) {
-            while (!(USART1->SR & USART_SR_TC)) { }
+            while (!(USART1->SR & USART_SR_TXE)) { }
             USART1->DR = buf[i];
         }
     }

@@ -146,3 +146,67 @@ jobs:
             examples/ch32v003/main.c \
             -Imoteos -Imoteos/port/ch32v \
             -I"$SDK/Core" -I"$SDK/Peripheral/inc" -I"$SDK/Debug" -I"$USER"
+
+  qemu-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchains
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-none-eabi qemu-system-arm
+
+      - name: Build smoke test (Cortex-M3, stm32vldiscovery)
+        run: |
+          arm-none-eabi-gcc -std=c99 -Wall -Wextra -Werror -Os -mcpu=cortex-m3 -mthumb \
+            -ffreestanding -nostdlib -T tests/qemu/cm3/link.ld \
+            -o /tmp/moteos_qemu.elf \
+            tests/qemu/cm3/main.c tests/qemu/cm3/startup.c \
+            moteos/mote.c moteos/mote_task.c moteos/mote_mail.c moteos/port/mote_port.c \
+            -Imoteos -Imoteos/port/cm3
+
+      - name: Run in QEMU (boot, vectors, SysTick, timer→event flow)
+        run: |
+          # 判定靠 stdout 的 QEMU_PASS/QEMU_FAIL 关键字（semihosting 退出码
+          # 在各平台透传不一致）；向量表/SysTick 断掉时死循环 → timeout 判失败
+          timeout 60s qemu-system-arm -M stm32vldiscovery -cpu cortex-m3 \
+            -nographic -monitor none \
+            -semihosting-config enable=on,target=native \
+            -kernel /tmp/moteos_qemu.elf 2>&1 | tee /tmp/qemu.log
+          grep -q "QEMU_PASS" /tmp/qemu.log || { echo "smoke test failed"; exit 1; }
+          ! grep -q "QEMU_FAIL" /tmp/qemu.log || { echo "smoke test reported failure"; exit 1; }
+
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S . -B build-cov -DCMAKE_C_FLAGS="-Werror --coverage -O0"
+
+      - name: Build
+        run: cmake --build build-cov
+
+      - name: Test
+        run: ctest --test-dir build-cov --output-on-failure
+
+      - name: Coverage report (fail under 85% lines)
+        run: |
+          pip install gcovr
+          gcovr --root . --exclude tests --exclude 'build.*' \
+            --fail-under-line 85 --print-summary
+
+  cppcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cppcheck
+        run: sudo apt-get update && sudo apt-get install -y cppcheck
+
+      - name: Static analysis (warning/performance/portability)
+        run: |
+          cppcheck --enable=warning,performance,portability --std=c99 \
+            --inline-suppr --error-exitcode=1 \
+            -Imoteos -Imoteos/port/host -Itests moteos

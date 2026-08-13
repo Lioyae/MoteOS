@@ -17,7 +17,10 @@ void mote_idle(void)
 
 #else
 
-void SysTick_Handler(void)
+/* 弱符号：用户已有自己的 SysTick（延时函数等）时，只需在工程里
+ * 重定义一个强符号 SysTick_Handler（记得在里面调用 mote_tick()），
+ * 链接器会自动选强符号，无需把 mote_port.c 从工程剔除 */
+MOTE_WEAK void SysTick_Handler(void)
 {
     mote_tick();
 }

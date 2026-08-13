@@ -29,20 +29,11 @@ static mote_drop_hook_t s_drop_hook;
 static uint8_t s_in_drop_hook;
 
 #ifdef MOTE_TEST_INJECT_ENABLE
-static void (*s_test_inject)(void);
-/* do-while 形式：避免三元 void 分支（GCC 扩展），-pedantic 兼容 */
-#define MOTE_TEST_INJECT()                                                     \
-    do {                                                                       \
-        if (s_test_inject != NULL) {                                           \
-            s_test_inject();                                                   \
-        }                                                                      \
-    } while (0)
+void (*s_test_inject)(void);
 void mote_test_inject_set(void (*fn)(void))
 {
     s_test_inject = fn;
 }
-#else
-#define MOTE_TEST_INJECT() ((void)0)
 #endif
 
 #if MOTE_DELAYED_MAX > 0
@@ -104,7 +95,11 @@ uint32_t mote_dropped_count(void)
 
 void mote_set_drop_hook(mote_drop_hook_t hook)
 {
+    /* 钩子可能在中断上下文被读取/调用，赋值必须与中断互斥。
+     * 建议仅在启动时（中断开启前）调用本函数；运行中更换也安全 */
+    mote_crit_state_t cs = mote_crit_enter();
     s_drop_hook = hook;
+    mote_crit_exit(cs);
 }
 
 void mote_note_dropped(uint16_t evt)
@@ -286,9 +281,10 @@ mote_status_t mote_timer_restart(mote_timer_t *t, uint32_t ms)
 
 mote_status_t mote_event_post_delayed(uint16_t evt, void *param, uint32_t ms)
 {
-    /* ms 上限运行时校验（回绕比较的数学边界，约 24.8 天）：
-     * 与定时器 API 同口径，不依赖可被关闭的 MOTE_ASSERT */
-    if (ms >= 0x80000000u) {
+    /* 时长运行时校验（与定时器 API 同口径，不依赖可被关闭的 MOTE_ASSERT）：
+     * ms==0 语义含糊（等于"下一拍投递"），直接拒绝；
+     * ms≥2^31 破坏回绕比较的数学边界（约 24.8 天） */
+    if (ms == 0 || ms >= 0x80000000u) {
         return MOTE_ERR_PARAM;
     }
 #if MOTE_DELAYED_MAX > 0
@@ -339,6 +335,7 @@ static void mote_process_timers(void)
 
     while (t != NULL) {
         mote_timer_t *next = t->next; /* 安全迭代：先缓存后继 */
+        MOTE_TEST_INJECT(); /* 交错测试窗口：定时器列表遍历期间伪中断可插入 */
         if ((int32_t)(now - t->due) >= 0) {
             if (t->period != 0) {
                 /* 相位稳定：due 按周期推进而不是"从现在重算"（due += period），
@@ -413,6 +410,7 @@ bool mote_poll(void)
     bool got;
     mote_crit_state_t cs;
 
+    MOTE_TEST_INJECT(); /* 交错测试窗口：主循环单步前伪中断可插入 */
     mote_process_timers();
 #if MOTE_ENABLE_TASK
     mote_process_tasks();
