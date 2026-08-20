@@ -25,13 +25,19 @@
 #endif
 
 #ifndef STAGE16_WAKE_PERIOD_MS
-#define STAGE16_WAKE_PERIOD_MS 10000u
+#define STAGE16_WAKE_PERIOD_MS 2000u
 #endif
 
 /* Set to 0 for the cleanest current measurement.
  * Default 1 gives a short PC1 pulse at every wake, useful as a scope trigger. */
 #ifndef STAGE16_MARKER_ENABLE
 #define STAGE16_MARKER_ENABLE 1
+#endif
+
+/* Keep the marker intentionally visible on a seconds/div scope view.
+ * Disable STAGE16_MARKER_ENABLE for final clean-current measurement. */
+#ifndef STAGE16_MARKER_PULSE_LOOPS
+#define STAGE16_MARKER_PULSE_LOOPS 200000u
 #endif
 
 enum {
@@ -128,7 +134,7 @@ static void wake_handler(uint16_t evt, void *param, void *ctx)
 
 #if STAGE16_MARKER_ENABLE
     GPIOC->OUTDR |= GPIO_Pin_1;
-    for (volatile uint32_t i = 0; i < 800u; i++) {
+    for (volatile uint32_t i = 0; i < STAGE16_MARKER_PULSE_LOOPS; i++) {
         __asm volatile ("nop");
     }
     GPIOC->OUTDR &= (uint16_t)~GPIO_Pin_1;
