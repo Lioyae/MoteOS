@@ -194,12 +194,7 @@ static void mote_systick_set(uint32_t ms)
 #endif
 }
 
-/* 弱符号：用户已有自己的 SysTick（延时函数等）时，只需在工程里
- * 重定义一个强符号 SysTick_Handler（记得在里面调用 mote_tick()
- * 或 mote_tick_advance()），链接器会自动选强符号，
- * 无需把 mote_port.c 从工程剔除 */
-MOTE_WEAK void SysTick_Handler(void) MOTE_SYSTICK_IRQ_ATTR;
-MOTE_WEAK void SysTick_Handler(void)
+void mote_port_systick_handler(void)
 {
     if (s_nap_cycles == 0u) {
 #if defined(MOTE_PORT_CH32)
@@ -216,6 +211,16 @@ MOTE_WEAK void SysTick_Handler(void)
         mote_systick_set(MOTE_TICK_MS);
         s_nap_ms = MOTE_TICK_MS;
     }
+}
+
+/* 弱符号：用户已有自己的 SysTick（延时函数等）时，只需在工程里
+ * 重定义一个强符号 SysTick_Handler，并在里面调用
+ * mote_port_systick_handler()。tickless 下不要只调用 mote_tick()，
+ * 否则长拍入账状态会和 port 层脱节。 */
+MOTE_WEAK void SysTick_Handler(void) MOTE_SYSTICK_IRQ_ATTR;
+MOTE_WEAK void SysTick_Handler(void)
+{
+    mote_port_systick_handler();
 }
 
 void mote_idle(uint32_t next_due)
@@ -268,16 +273,21 @@ void mote_idle(uint32_t next_due)
 
 #else /* !MOTE_TICKLESS：固定拍 */
 
-/* 弱符号：用户已有自己的 SysTick（延时函数等）时，只需在工程里
- * 重定义一个强符号 SysTick_Handler（记得在里面调用 mote_tick()），
- * 链接器会自动选强符号，无需把 mote_port.c 从工程剔除 */
-MOTE_WEAK void SysTick_Handler(void) MOTE_SYSTICK_IRQ_ATTR;
-MOTE_WEAK void SysTick_Handler(void)
+void mote_port_systick_handler(void)
 {
 #if defined(MOTE_PORT_CH32)
     mote_ch32_systick_clear();
 #endif
     mote_tick();
+}
+
+/* 弱符号：用户已有自己的 SysTick（延时函数等）时，只需在工程里
+ * 重定义一个强符号 SysTick_Handler，并在里面调用
+ * mote_port_systick_handler()。 */
+MOTE_WEAK void SysTick_Handler(void) MOTE_SYSTICK_IRQ_ATTR;
+MOTE_WEAK void SysTick_Handler(void)
+{
+    mote_port_systick_handler();
 }
 
 void mote_idle(uint32_t next_due)

@@ -54,6 +54,14 @@ enum {
 static mote_timer_t wake_timer;
 static volatile uint32_t s_wake_count;
 
+void mote_port_systick_handler(void);
+void SysTick_Handler(void) __attribute__((interrupt("WCH-Interrupt-fast")));
+
+void SysTick_Handler(void)
+{
+    mote_port_systick_handler();
+}
+
 static void uart_putc(char c)
 {
     if (c == '\n') {

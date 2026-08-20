@@ -24,6 +24,10 @@
 #define MOTE_ENABLE_MAILBOX 0
 ```
 
+本例程在 `User/main.c` 放了一个强符号 `SysTick_Handler`，用于确认向量表确实
+打到用户工程；handler 内部调用 `mote_port_systick_handler()`，实际 tickless
+入账仍由 `moteos/port/mote_port.c` 的 port 状态机完成。
+
 ## 预期波形
 
 启动时会有一段高电流，因为 GPIO、USART 和启动打印都在工作。打印完成后：
