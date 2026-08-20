@@ -4,7 +4,8 @@
  * Purpose:
  *   Measure board current with minimum application noise:
  *   - boot print once on USART1 TX PD5
- *   - turn PC0 LED off, then put PC0 into analog input
+ *   - diagnostic default: pulse the active-low PC0 LED at every wake
+ *   - clean mode: turn PC0 LED off, then put PC0 into analog input
  *   - disable USART1 and put PD5/PD6 into analog input after the boot print
  *   - run tickless MoteOS with one long-period wake event
  *
@@ -38,6 +39,12 @@
  * Disable STAGE16_MARKER_ENABLE for final clean-current measurement. */
 #ifndef STAGE16_MARKER_PULSE_LOOPS
 #define STAGE16_MARKER_PULSE_LOOPS 200000u
+#endif
+
+/* Diagnostic mode: blink the active-low PC0 LED at every wake so the 2s
+ * schedule is unambiguous. Set this to 0 for final clean-current measurement. */
+#ifndef STAGE16_LED_DEBUG_ENABLE
+#define STAGE16_LED_DEBUG_ENABLE 1
 #endif
 
 enum {
@@ -112,15 +119,25 @@ static void quiet_pins_after_boot(void)
     /* PD5/PD6 analog input: remove UART output/input bias from the measurement. */
     GPIOD->CFGLR &= ~(0xFFu << 20);
 
-    /* PC0 analog input: external pull-up keeps the active-low LED off without
-     * driving the pin. Keep PC1 as output only when marker is enabled. */
+    /* PC0 analog input in clean mode; keep it as output-high in diagnostic mode
+     * so the wake handler can emit a visible active-low LED pulse. */
+#if STAGE16_LED_DEBUG_ENABLE
     GPIOC->CFGLR &= ~(0xFu << 0);
+    GPIOC->CFGLR |= (0x1u << 0);
+    GPIOC->OUTDR |= GPIO_Pin_0;
+#else
+    GPIOC->CFGLR &= ~(0xFu << 0);
+#endif
+
+    /* Keep PC1 as output only when marker is enabled. */
 #if STAGE16_MARKER_ENABLE
     GPIOC->CFGLR &= ~(0xFu << 4);
     GPIOC->CFGLR |= (0x1u << 4);
 #else
     GPIOC->CFGLR &= ~(0xFu << 4);
+#if !STAGE16_LED_DEBUG_ENABLE
     RCC->APB2PCENR &= (uint32_t)~(RCC_APB2Periph_GPIOC | RCC_APB2Periph_GPIOD);
+#endif
 #endif
 }
 
@@ -134,9 +151,19 @@ static void wake_handler(uint16_t evt, void *param, void *ctx)
 
 #if STAGE16_MARKER_ENABLE
     GPIOC->OUTDR |= GPIO_Pin_1;
+#endif
+#if STAGE16_LED_DEBUG_ENABLE
+    GPIOC->OUTDR &= (uint16_t)~GPIO_Pin_0; /* active-low LED on */
+#endif
+#if STAGE16_MARKER_ENABLE || STAGE16_LED_DEBUG_ENABLE
     for (volatile uint32_t i = 0; i < STAGE16_MARKER_PULSE_LOOPS; i++) {
         __asm volatile ("nop");
     }
+#endif
+#if STAGE16_LED_DEBUG_ENABLE
+    GPIOC->OUTDR |= GPIO_Pin_0; /* LED off */
+#endif
+#if STAGE16_MARKER_ENABLE
     GPIOC->OUTDR &= (uint16_t)~GPIO_Pin_1;
 #endif
 }
@@ -155,10 +182,12 @@ int main(void)
     uart_puts("\n==== MoteOS CH32V003 Stage16 ====\n");
     uart_puts("low-power current measurement, tickless + WCH __WFI\n");
     uart_puts("boot print only; USART off after this banner\n");
-    uart_puts("PC0 LED off/analog; wake_ms=");
+    uart_puts("wake_ms=");
     uart_put_u32(STAGE16_WAKE_PERIOD_MS);
     uart_puts("; marker_pc1=");
     uart_put_u32(STAGE16_MARKER_ENABLE);
+    uart_puts("; led_debug=");
+    uart_put_u32(STAGE16_LED_DEBUG_ENABLE);
     uart_puts("\n");
 
     systick_reload = (SystemCoreClock / 1000u) * MOTE_TICK_MS +
