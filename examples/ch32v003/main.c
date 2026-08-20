@@ -14,16 +14,10 @@
  *   - 源文件：本文件 + moteos/mote.c + moteos/mote_task.c + moteos/mote_mail.c
  *             + moteos/port/mote_port.c
  *   - 头文件路径：moteos/ 和 moteos/port/ch32v/
- *   - 无需定义任何宏；SysTick 由 mote_port.c 接管
+ *   - 固定拍无需定义任何宏；SysTick 由 mote_port.c 接管
+ *   - 若启用 tickless，必须在工程全局宏里定义：
+ *       MOTE_TICKLESS=1, MOTE_PORT_HCLK_HZ=48000000u
  */
-
-/* ---- tickless 低功耗：空闲时按下一 deadline 重装 SysTick 再 wfi ----
- * ⚠ 这两个宏必须工程级全局生效（mote_port.c 也要编译到）：Keil/MRS 请在
- * 工程宏定义处设置，或直接在 moteos/mote_config.h 里定义；只在本文件定义
- * 会静默退化为固定拍。关掉即回到固定 1ms 拍（更简单、功耗更高）。
- * 使用 tickless 前先按 docs/porting.md 的 tickless 板级验证清单实测 */
-#define MOTE_TICKLESS 1
-#define MOTE_PORT_HCLK_HZ 48000000u  /* CH32V003 默认主频 48MHz */
 
 #include "mote.h"
 #include "ch32v00x.h"
@@ -104,12 +98,19 @@ static void gpio_init(void)
 
 int main(void)
 {
+    uint32_t systick_reload;
+
     SystemInit();
     gpio_init();
 
     /* 节拍：SysTick 中断由 port 层接管（SysTick_Handler → mote_tick / tickless 长拍）。
      * 初始按 MOTE_TICK_MS 配固定拍，tickless 空闲时 port 层会动态重装 */
-    SysTick_Config(SystemCoreClock / (1000 / MOTE_TICK_MS));
+    systick_reload = (SystemCoreClock / 1000u) * MOTE_TICK_MS
+                   + ((SystemCoreClock % 1000u) * MOTE_TICK_MS) / 1000u;
+    if (systick_reload == 0u || SysTick_Config(systick_reload) != 0u) {
+        for (;;) {
+        }
+    }
 
     mote_init(evt_table, sizeof(evt_table) / sizeof(evt_table[0]));
     mote_task_init(tasks, sizeof(tasks) / sizeof(tasks[0]));

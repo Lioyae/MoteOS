@@ -21,7 +21,7 @@ static mote_task_slot_t s_slots[MOTE_TASK_SLOT_MAX];
 void mote_task_init(const mote_task_desc_t *table, uint16_t count)
 {
     s_task_table = table;
-    s_task_count = count;
+    s_task_count = (table != NULL) ? count : 0;
     for (uint8_t i = 0; i < MOTE_TASK_SLOT_MAX; i++) {
         s_slots[i].active = false;
     }
@@ -29,13 +29,14 @@ void mote_task_init(const mote_task_desc_t *table, uint16_t count)
 
 mote_status_t mote_task_start(uint16_t id)
 {
-    if (id >= s_task_count) {
+    if (s_task_table == NULL || id >= s_task_count) {
         return MOTE_ERR_PARAM;
     }
     /* 与定时器同口径的运行时校验（此前仅靠默认关闭的 MOTE_ASSERT）：
      * period_ms==0 会在 catch-up 空转后每 poll 同步调用一次 handler，
      * 与 spin 无异；period_ms≥2^31 会使回绕比较数学失效 */
-    if (s_task_table[id].period_ms == 0 ||
+    if (s_task_table[id].handler == NULL ||
+        s_task_table[id].period_ms == 0 ||
         s_task_table[id].period_ms >= 0x80000000u) {
         return MOTE_ERR_PARAM;
     }
@@ -70,10 +71,24 @@ void mote_process_tasks(void)
 {
     uint32_t now = mote_ticks();
 
+    if (s_task_table == NULL) {
+        return;
+    }
     for (uint8_t i = 0; i < MOTE_TASK_SLOT_MAX; i++) {
         mote_task_slot_t *s = &s_slots[i];
         if (s->active && (int32_t)(now - s->due) >= 0) {
-            const mote_task_desc_t *d = &s_task_table[s->id];
+            const mote_task_desc_t *d;
+
+            if (s->id >= s_task_count) {
+                s->active = false;
+                continue;
+            }
+            d = &s_task_table[s->id];
+            if (d->handler == NULL || d->period_ms == 0 ||
+                d->period_ms >= 0x80000000u) {
+                s->active = false;
+                continue;
+            }
             /* 与定时器同语义：相位稳定推进（due += period），
              * 落后超 MOTE_TIMER_CATCHUP_MAX 拍重建相位 */
             uint32_t n = 0;
@@ -87,6 +102,32 @@ void mote_process_tasks(void)
             d->handler(MOTE_EVT_TASK, NULL, d->ctx);
         }
     }
+}
+
+uint32_t mote_task_next_due(void)
+{
+    uint32_t best = MOTE_TICK_NONE;
+
+    if (s_task_table == NULL) {
+        return best;
+    }
+    for (uint8_t i = 0; i < MOTE_TASK_SLOT_MAX; i++) {
+        const mote_task_slot_t *s = &s_slots[i];
+        const mote_task_desc_t *d;
+
+        if (!s->active || s->id >= s_task_count) {
+            continue;
+        }
+        d = &s_task_table[s->id];
+        if (d->handler == NULL || d->period_ms == 0 ||
+            d->period_ms >= 0x80000000u) {
+            continue;
+        }
+        if (best == MOTE_TICK_NONE || (int32_t)(s->due - best) < 0) {
+            best = s->due;
+        }
+    }
+    return best;
 }
 
 #endif

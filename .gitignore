@@ -3,6 +3,5 @@ build*/
 *.o
 *.exe
 
-# 文档站构建产物：依赖与站点输出不入库（构建方式见 moteos_docs/package.json）
-moteos_docs/node_modules/
-moteos_docs/site/
+# 本地文档站工作副本不入库
+moteos_docs/

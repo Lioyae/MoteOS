@@ -78,10 +78,10 @@ MoteOS 是个"事件驱动的协作式内核"。把它想象成工厂的调度�
 > 目录，但**必须在工程宏定义里加**：
 > `-DMOTE_CH32_HAL_HEADER=<ch32v20x.h>`（V203，中型）或
 > `-DMOTE_CH32_HAL_HEADER=<ch32v30x.h>`（V307，大型）。
-> 另外青稞的临界区开关寄存器 INTSYSCR 默认按 CSR `0x800` 处理，不同代次
-> 手册的映射可能有差异：上板前按目标芯片手册核验，不一致就用
-> `-DMOTE_CH32_INTSYSCR=<值>` 覆盖——**这直接决定关中断和 wfi 行为，
-> 是检查清单里的必测项**（见第 7 章）。
+> CH32V003/V007 官方 SDK 的 `__enable_irq()` / `__disable_irq()` 操作的是
+> `mstatus`，MoteOS 的 `ch32v` port 也按同一个寄存器保存/恢复。CH32V003
+> 已完成 Stage13-15 上板验证：WCH SDK `__WFI()` 即使从 MoteOS 临界区路径进入，
+> 也能睡眠并被 SysTick 唤醒；CH32V007/V203/V307 仍需按第 7 章在目标板复测。
 
 ---
 
@@ -429,17 +429,17 @@ void mote_idle(uint32_t next_due)
    > 谁来按门铃？内核没有别的唤醒手段，这事就得你自己设计，别指望它。
    > 一句话：**内核只保证"打盹"级睡眠的可靠性，深度睡眠请自担风险**。
 
-3. **青稞（CH32V）需板级确认**：标准 RISC-V 规范规定 MIE=0 时 wfi 不睡眠、
-   继续执行；而本移植关中断用的是青稞私有 INTSYSCR（CSR 0x800），
-   wfi 到底受不受它影响、pending 中断能否唤醒，WCH 文档未明确，
-   本仓库**没有任何板级验证**。上板后务必实测两项：空闲电流是否明显下降
-   （wfi 真的睡了）、tick 是否准时唤醒（没睡过头）。
+3. **青稞（CH32V）按芯片实测收口**：标准 RISC-V 规范规定 MIE=0 时 wfi
+   可以继续执行，不保证进入低功耗；WCH SDK 的 `__WFI()` 实际是青稞专用
+   WFE 序列。CH32V003 Stage14 已验证：从关中断入口调用 WCH `__WFI()`，
+   SysTick 能唤醒，返回后中断为开启状态，随后 `mote_crit_exit()` 会恢复
+   调用方保存的状态。Stage15 综合 tickless + `__WFI()` 长跑到 671000 ticks，
+   `drop=0 err=0`。
 
-   > 白话解释：青稞是 WCH 家芯片内核的名字。标准说"门铃关了的时候闭眼无效"，
-   > 但青稞关门的开关（INTSYSCR 这个特殊寄存器）和标准不一样，闭眼到底
-   > 灵不灵、门铃还响不响，厂商没写清楚，我们也没条件替你实测。
-   > 所以用青稞芯片的同学，**上板后一定要亲手验证**：电流降了才算真睡、
-   > 心跳准时才算没睡过头。这也是第 7 章检查清单里专门列了一条的原因。
+   > 白话解释：CH32V003 这颗芯片已经证明"闭眼能睡、门铃能叫醒"。但这不是
+   > 全系列免检证书：CH32V007/V203/V307 以及你的具体板子仍要复测，尤其要测
+   > 空闲电流，因为板载 LED、串口芯片、稳压器、WCH-Link 都可能让电流看起来
+   > 没有明显下降。
 
 ### 4.3 tickless 空闲（可选进阶）
 
@@ -447,7 +447,7 @@ void mote_idle(uint32_t next_due)
 门铃叫醒一次——为了看时间。tickless 的思路是：反正下一件到点的事在 3 秒后，
 那就把报时器**拨到 3 秒后再响**，中间睡个整觉。
 
-`next_due` 是内核已知的**下一到期节拍**（定时器 + 延时投递中的最早者；
+`next_due` 是内核已知的**下一到期节拍**（定时器 + 延时投递 + 任务中的最早者；
 `MOTE_TICK_NONE` = 无任何到期项）。固定拍移植忽略它即可；要省功耗，
 开启 `MOTE_TICKLESS=1`（配合 `MOTE_PORT_HCLK_HZ`）后，空闲时把 SysTick
 重装到 `next_due` 再睡，唤醒后恢复固定拍。参考实现见
@@ -514,7 +514,7 @@ void mote_idle(uint32_t next_due)
    > （替身），你自己写同名函数（本尊）就会接管它——接管后记得自己按
    > 上面两种模式（固定拍 / tickless）把账记上。
 
-**tickless 板级验证清单**（未经任何真实芯片验证，上板必测）：
+**tickless 板级验证清单**（换芯片/换板子仍要逐项实测）：
 
 - [ ] `MOTE_PORT_HCLK_HZ` 与实际主频一致（含时钟树切换后的最终 HCLK）
 - [ ] 空闲时 SysTick 中断间隔随 deadline 变化（示波器/电流波形）
@@ -522,7 +522,11 @@ void mote_idle(uint32_t next_due)
 - [ ] 提前唤醒（外设中断早于 deadline）后台时基无漂移：跑 1 小时，
       定时器相位偏移 < 允许值
 - [ ] 24 位（Cortex-M）/ 64 位（青稞）计数器上限换算正确，nap 不溢出
-- [ ] 青稞 INTSYSCR 与 wfi 交互：关闭中断时 wfi 仍能睡眠且可被唤醒
+- [ ] 青稞 mstatus 关中断与 wfi 交互：关闭中断时 wfi 仍能睡眠且可被唤醒
+
+> CH32V003 已完成上述功能性验证：Stage11/12 覆盖 tickless 入账与综合无 WFI
+> 长跑，Stage13/14 覆盖 WFI 唤醒和关中断入口，Stage15 覆盖 tickless + WCH
+> `__WFI()` 综合长跑。低功耗**电流数值**仍需按你的板子单独测。
 
 > 白话解释最后一条清单里的"时钟树"：芯片的主频像一棵树的树干，
 > 各个外设的时钟是树枝，都能独立分叉调速。你的主频可能开机后被代码
@@ -587,11 +591,12 @@ static inline uint32_t mote_crit_active(void)
 | 内核 | 状态来源 | 实现 |
 |---|---|---|
 | Cortex-M0+/M3 | PRIMASK | 裸汇编 `MRS/CPSID/MSR`，**不依赖 CMSIS**（见 `port/cm0plus`、`port/cm3`，同时兼容 GCC/AC6/AC5） |
-| WCH RISC-V | INTSYSCR（CSR 0x800） | `csrr/csrw 0x800`（见 `port/ch32v`） |
+| WCH RISC-V | mstatus | `csrr/csrw mstatus` + WCH SDK `__disable_irq()`（见 `port/ch32v`） |
 | AVR 等 | 状态寄存器 SREG | `in`/`out` 指令保存恢复 SREG |
 
 > 白话解释表格：每颗芯片"挂牌子的开关"位置不一样——ARM 家族的叫 PRIMASK、
-> WCH RISC-V 的叫 INTSYSCR、AVR 的叫 SREG，但功能都是"门铃总开关"。
+> WCH RISC-V 当前 port 按官方 SDK 口径使用 `mstatus`、AVR 的叫 SREG，
+> 但功能都是"门铃总开关"。
 > 移植层的活就是：把开关位置找出来，包成上面几个接口的形状。
 > "不依赖 CMSIS"意思是直接用汇编摸开关，不借厂商的工具箱——
 > 这样在 GCC、AC6、AC5 各种翻译官手里都能编译过。
@@ -652,9 +657,17 @@ static const mote_evt_entry_t table[] = {
 
 int main(void)
 {
+    uint32_t systick_reload;
+
     /* 参数 = MOTE_TICK_MS 毫秒内的时钟周期数（不是频率）。
-     * 例：72MHz、1ms 节拍 → 72000000/1000 = 72000 个周期 */
-    SysTick_Config(SystemCoreClock / (1000 / MOTE_TICK_MS));
+     * 例：72MHz、1ms 节拍 → 72000000/1000 = 72000 个周期。
+     * 若返回非 0，说明重装值超出当前 SysTick 的硬件上限。 */
+    systick_reload = (SystemCoreClock / 1000u) * MOTE_TICK_MS
+                   + ((SystemCoreClock % 1000u) * MOTE_TICK_MS) / 1000u;
+    if (systick_reload == 0u || SysTick_Config(systick_reload) != 0u) {
+        for (;;) {
+        }
+    }
     mote_init(table, sizeof(table) / sizeof(table[0]));
     mote_timer_start(&led_timer, EVT_LED, NULL, 500, true);  /* 每500ms触发 */
     mote_loop();
@@ -818,7 +831,7 @@ handler 运行在主循环上下文，所以**全部 API 都能调**：`mote_eve
 > 根本没闭眼（函数被覆盖或没实现）；闭眼了还想更省，就上 tickless。
 
 **Q7：MOTE_TICK_MS 改成 10 会怎样？**
-tick 变成 10ms 一拍，`SysTick_Config(SystemCoreClock / (1000 / MOTE_TICK_MS))` 保持这个公式即可，定时器精度变粗但更省电。tickless 模式下 deadline 计算也基于这一拍宽，无需额外处理。取值范围 1..1000，越界会编译期 `#error` 直接拦下（防静默出错）。
+tick 变成 10ms 一拍，重装值应按 `floor(SystemCoreClock * MOTE_TICK_MS / 1000)` 计算。示例代码用 `(SystemCoreClock / 1000u) * MOTE_TICK_MS + ((SystemCoreClock % 1000u) * MOTE_TICK_MS) / 1000u`，避免 32 位乘法溢出，也不引入 64 位除法。不要写成 `SystemCoreClock / (1000 / MOTE_TICK_MS)`：当 `MOTE_TICK_MS` 不能整除 1000 时会产生额外截断误差。tickless 模式下 deadline 计算也基于这一拍宽，无需额外处理。取值范围 1..1000，越界会编译期 `#error` 直接拦下（防静默出错）；但具体芯片的 SysTick 重装寄存器还有位宽上限，`SysTick_Config` 返回非 0 时要降低 `MOTE_TICK_MS` 或换定时器。
 
 > 白话补充：心跳从 1ms 一拍放缓到 10ms 一拍，闹钟的最小刻度就变成 10ms，
 > 精度粗了、但醒来的次数少了、更省电。公式不用改——它本来就是按拍宽算的。
@@ -849,8 +862,8 @@ tick 变成 10ms 一拍，`SysTick_Config(SystemCoreClock / (1000 / MOTE_TICK_MS
 ## 第 7 章：移植成功检查清单
 
 这一章要干成的事：**在说"移植完成"之前，逐项打勾**。前两项是编译和体积的
-"纸面账"，后面的每一项都要求上板实测——因为本仓库没有任何官方板级实测数据，
-你的板子只有你自己能验。
+"纸面账"，后面的每一项都要求上板实测。CH32V003 已有一轮 MoteOS 上板记录，
+但你的板子、时钟、外设负载和低功耗电流仍要自己验。
 
 - [ ] 编译 0 error 0 warning（开 `-Wall -Wextra -Werror`，与 CI 同口径）
 - [ ] 内核体积核对：map 文件里内核三件套 text <2.75KB（RV32）/ <2.5KB（M0+）、移植层 port text <512B、RAM <512B（本机实测 M0+ 三件套 2297B / port 14B / RAM 280B，见 README 与 docs/test.md；体积随工具链版本小幅浮动，以 CI 阈值与你自己 map 文件为准）
@@ -873,6 +886,46 @@ tick 变成 10ms 一拍，`SysTick_Config(SystemCoreClock / (1000 / MOTE_TICK_MS
 >   退出拉低，用示波器量脉冲宽度。这是把"估算"变成"实测"的唯一途径。
 > - **看门狗**：芯片里的"防死机保险丝"，程序卡死就自动重启。有它的时候，
 >   重启 100 次看会不会卡在哪个环节。
+
+### 7.1 用万用表和示波器测低功耗电流
+
+先分清两个目标：
+
+- **板级电流**：整块板吃多少电，包含稳压器、上拉电阻、LED、USB 转串口、
+  WCH-Link、外部模块。这个数字最接近你的产品，但不等于芯片本体电流。
+- **芯片电流**：尽量只测 MCU VDD/VSS。要断开不必要外设、LED、调试器供电，
+  难度更高，但更能判断 `wfi/tickless` 本身有没有省电。
+
+万用表测平均电流：
+
+1. 先断电。不要把万用表电流档直接并在电源两端，那等于短路。
+2. 把供电正极断开，串进万用表：`电源 + → 万用表 A/mA 输入 → 板子 VDD`，
+   `电源 GND → 板子 GND`。
+3. 万用表先用最大电流档（比如 200mA 或 10A 档）开机，确认不会超量程，
+   再逐步切到 mA/uA 档。
+4. 先跑固定拍版本记一个平均值，再跑 tickless/WFI 版本记一个平均值。
+   如果 Stage15 还在每秒打印、PC0 还在闪 LED，这个值会包含串口和 LED 电流，
+   不是纯睡眠电流。
+5. 想测纯睡眠：关闭或拔掉 LED 负载，启动后停止串口打印，确认没有外设一直
+   拉电流，再看空闲平均值。
+
+示波器看瞬时电流：
+
+1. 串一个采样电阻（shunt）。低边最安全：`电源 GND → shunt → 板子 GND`。
+   普通台式示波器的地夹接大地，优先用低边测法，别把地夹夹到 VDD 高边上。
+2. 电阻取值按电流范围选：mA 级用 1~10Ω，uA 级可用 10~100Ω，但要确认压降
+   不会让 MCU 供电过低。
+3. 示波器测 shunt 两端电压，电流公式：`I = Vshunt / Rshunt`。
+   例：10Ω 上看到 20mV，电流就是 2mA。
+4. 开 DC 耦合，先用较慢时基看 1 秒内的平均趋势，再放大看 SysTick/串口/LED
+   带来的尖峰。需要时用示波器的平均值、最小值、最大值统计。
+5. 若要看"什么时候睡、什么时候醒"，可临时加一个 GPIO 标记：进 `mote_idle()`
+   前拉高，WFI 返回后拉低；示波器 CH1 看 GPIO，CH2 看 shunt 电压。注意这个
+   GPIO 本身也会带来一点电流和时序扰动，测完要去掉。
+
+CH32V003 + PC0 LED 的特别提醒：你的 LED 是外部上拉、低电平点亮，LED 亮时电流
+会明显盖过 MCU 睡眠电流。粗算 `I_LED = (VDD - Vf) / R`，例如 3.3V、红灯 Vf
+约 2.0V、1kΩ 上拉，LED 亮时就是约 1.3mA。要测低功耗，不要让 LED 一直参与。
 
 全部打勾，恭喜：这颗芯片的 MoteOS 移植完成。欢迎把实测数据回馈给仓库，
 让下一颗芯片的移植者少踩一个坑。

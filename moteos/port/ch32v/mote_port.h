@@ -21,10 +21,9 @@
  * 且它在定义 IRQn_Type 之后才包含 core_riscv.h。
  * 直接包含 core_riscv.h 会因 IRQn_Type 未定义而编译失败。
  *
- * 临界区保存/恢复 INTSYSCR（CSR 0x800，青稞的中断系统控制寄存器）：
- *   __enable_irq  = 写 0x6088（bit7=1 中断开启）
- *   __disable_irq = 写 0x6000（bit7=0 中断关闭）
- * 完整保存恢复该寄存器，支持嵌套、不破坏调用方状态 */
+ * 临界区保存/恢复 mstatus：
+ *   本 SDK 的 __enable_irq/__disable_irq 操作 mstatus 的 0x88 位组。
+ *   临界区必须保存并恢复同一个寄存器，支持嵌套、不破坏调用方状态。 */
 
 #ifndef MOTE_CH32_HAL_HEADER
 #define MOTE_CH32_HAL_HEADER <ch32v00x.h>
@@ -35,13 +34,9 @@
  * 访问方式（64 位比较寄存器、向上计数） */
 #define MOTE_PORT_CH32 1
 
-/* 青稞中断系统控制寄存器（INTSYSCR）的 CSR 编号。
- * ⚠ 同一 port 头文件服务 V2 代（CH32V003/V007）与 V3 代（CH32V203/V307），
- * 不同代次手册的 CSR 映射存在差异，默认值 0x800 以本 SDK 的 core_riscv.h
- * 口径为准；若目标代次不同，用 -DMOTE_CH32_INTSYSCR=<值> 覆盖。
- * 此寄存器直接决定临界区与 WFI 行为，上板前必须按目标芯片手册实测核验。 */
-#ifndef MOTE_CH32_INTSYSCR
-#define MOTE_CH32_INTSYSCR 0x800
+/* 与 WCH SDK core_riscv.h 的 __enable_irq/__disable_irq 保持同一口径。 */
+#ifndef MOTE_CH32_MSTATUS_IRQ_MASK
+#define MOTE_CH32_MSTATUS_IRQ_MASK 0x88u
 #endif
 
 typedef uint32_t mote_crit_state_t;
@@ -53,27 +48,23 @@ typedef uint32_t mote_crit_state_t;
 static inline mote_crit_state_t mote_crit_enter(void)
 {
     mote_crit_state_t s;
-    __asm volatile("csrr %0, %[csr]" : "=r"(s) : [csr] "i" (MOTE_CH32_INTSYSCR));
+
+    __asm volatile("csrr %0, mstatus" : "=r"(s) : : "memory");
     __disable_irq();
     return s;
 }
 
 static inline void mote_crit_exit(mote_crit_state_t s)
 {
-    /* ⚠ 操作数编号陷阱：位置号 %0 永远指向第一个列出的操作数。
-     * 这里 s 必须写在 %[csr]（命名立即数）之前，否则 %0 会指到 CSR
-     * 立即数、s 被静默丢弃——旧写法（csrw %[csr], %0 + "i" 在前）曾被
-     * MounRiver 的 WCH 汇编器抓出 "Improper CSRxI immediate (2048)"，
-     * 而上游 xpack 汇编器放行（静默生成错误代码，且 s 永不写回） */
-    __asm volatile("csrw %[csr], %0" : : "r"(s),
-                   [csr] "i" (MOTE_CH32_INTSYSCR) : "memory");
+    __asm volatile("csrw mstatus, %0" : : "r"(s) : "memory");
 }
 
 static inline uint32_t mote_crit_active(void)
 {
     uint32_t s;
-    __asm volatile("csrr %0, %[csr]" : "=r"(s) : [csr] "i" (MOTE_CH32_INTSYSCR));
-    return (s & 0x80u) ? 0u : 1u; /* bit7=0 表示中断被关闭 */
+
+    __asm volatile("csrr %0, mstatus" : "=r"(s) : : "memory");
+    return ((s & MOTE_CH32_MSTATUS_IRQ_MASK) == MOTE_CH32_MSTATUS_IRQ_MASK) ? 0u : 1u;
 }
 
 /* 本 SDK 的 core_riscv.h 未提供 SysTick_Config，这里补齐（CMSIS 兼容签名）：

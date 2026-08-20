@@ -183,6 +183,60 @@ static void test_task_ms_bound(void)
     TEST_ASSERT(mote_task_stop(2) == MOTE_OK);
 }
 
+static void test_task_invalid_table_and_handler(void)
+{
+    static mote_task_desc_t mutable_tasks[] = {
+        MOTE_TASK_DEF(10, tsk0, NULL),
+    };
+    static const mote_task_desc_t null_handler_tasks[] = {
+        MOTE_TASK_DEF(10, NULL, NULL),
+    };
+
+    mote_init(NULL, 0);
+    mote_task_init(NULL, 1);
+    TEST_ASSERT(mote_task_start(0) == MOTE_ERR_PARAM);
+    mote_tick();
+    TEST_ASSERT(mote_poll() == false); /* 未初始化任务表不得崩溃 */
+
+    mote_task_init(null_handler_tasks, 1);
+    TEST_ASSERT(mote_task_start(0) == MOTE_ERR_PARAM);
+
+    /* 防御运行中描述符被写坏：process_tasks 应停用该槽而不是空指针调用 */
+    mutable_tasks[0].handler = tsk0;
+    mutable_tasks[0].period_ms = 1;
+    mote_task_init(mutable_tasks, 1);
+    s_calls0 = 0;
+    TEST_ASSERT(mote_task_start(0) == MOTE_OK);
+    mutable_tasks[0].handler = NULL;
+    mote_tick();
+    TEST_ASSERT(mote_poll() == false);
+    TEST_ASSERT(s_calls0 == 0);
+    TEST_ASSERT(mote_task_stop(0) == MOTE_ERR_NOT_FOUND);
+}
+
+static void test_task_next_due(void)
+{
+    mote_init(NULL, 0);
+    mote_task_init(tasks, 2);
+    TEST_ASSERT(mote_next_due() == MOTE_TICK_NONE);
+
+    TEST_ASSERT(mote_task_start(1) == MOTE_OK); /* 20ms */
+    TEST_ASSERT(mote_next_due() == 20);
+    TEST_ASSERT(mote_task_start(0) == MOTE_OK); /* 10ms: earlier */
+    TEST_ASSERT(mote_next_due() == 10);
+
+    for (int i = 0; i < 10; i++) {
+        mote_tick();
+    }
+    TEST_ASSERT(mote_poll() == false); /* task0 runs; tasks don't enqueue */
+    TEST_ASSERT(mote_next_due() == 20);
+
+    TEST_ASSERT(mote_task_stop(0) == MOTE_OK);
+    TEST_ASSERT(mote_next_due() == 20);
+    TEST_ASSERT(mote_task_stop(1) == MOTE_OK);
+    TEST_ASSERT(mote_next_due() == MOTE_TICK_NONE);
+}
+
 void suite_task(void)
 {
     test_task_periodic();
@@ -191,4 +245,6 @@ void suite_task(void)
     test_task_ctx();
     test_task_no_drift();
     test_task_ms_bound();
+    test_task_invalid_table_and_handler();
+    test_task_next_due();
 }

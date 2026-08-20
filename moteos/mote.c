@@ -609,6 +609,18 @@ static uint32_t mote_next_due_locked(void)
 {
     uint32_t best = (s_timers != NULL) ? s_timers->due : MOTE_TICK_NONE;
 
+#if MOTE_ENABLE_TASK
+    {
+        uint32_t task_due = mote_task_next_due();
+
+        if (task_due != MOTE_TICK_NONE &&
+            (best == MOTE_TICK_NONE ||
+             (int32_t)(task_due - best) < 0)) {
+            best = task_due;
+        }
+    }
+#endif
+
 #if MOTE_DELAYED_MAX > 0
     for (int i = 0; i < MOTE_DELAYED_MAX; i++) {
         if (s_delayed[i].used &&

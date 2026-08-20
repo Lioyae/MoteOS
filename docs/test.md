@@ -2,7 +2,8 @@
 
 > 本文汇总 MoteOS 的全部验证手段、**实测结果明细**与结论。
 > 测试代码在 `tests/`，CI 定义在 `.github/workflows/build.yml`。
-> 所有数字均来自 2026-08-13 的实际运行，非估计值。
+> 自动化测试数字来自 2026-08-13 的实际运行；CH32V003 上板验证记录来自
+> 2026-08-21 的 MounRiver/WCH-Link 实测输出。
 
 ---
 
@@ -17,10 +18,11 @@
 | 5 | 内存 | ASan/UBSan | 内存错误、未定义行为 | sanitizers |
 | 6 | 真实启动 | QEMU 冒烟（Cortex-M3，固定拍 + tickless 双档） | 启动/向量表/SysTick/tick→定时器→事件流；tickless：入账追平/nap 重装/固定拍恢复/漂移检测（时间膨胀执行） | qemu-smoke |
 | 7 | 可编译性 | 交叉编译 + 体积断言 | M0+/M3/RV32 可编译、内核三件套 + 移植层分账体积不失控 | cross-compile |
-| 8 | 集成 | 真实 SDK 例程编译 | CMSIS/WCH SDK 真实头文件下例程可编译（例程已启用 tickless） | cross-compile |
+| 8 | 集成 | 真实 SDK 例程编译 | CMSIS/WCH SDK 真实头文件下例程可编译（CI 全局启用 tickless） | cross-compile |
 | 9 | 可编译性 | tickless 交叉编译（`MOTE_TICKLESS=1`） | 三种架构的 SysTick 重装/追平代码可编译 | cross-compile |
 | 10 | 覆盖 | gcovr 行覆盖 ≥85% 门槛 | 测试没有大面积盲区 | coverage |
 | 11 | 静态 | cppcheck | warning/performance/portability | cppcheck |
+| 12 | 板级 | CH32V003 Stage1-15 | 固定拍、队列/定时器/邮箱/任务 API、drop hook、`mote_loop`、tickless 入账、WFI 唤醒、综合长跑 | 手动上板 |
 
 ---
 
@@ -247,7 +249,35 @@ handler 派发链路完整。tickless 档另验证（时间膨胀，1 tick-ms = 
 
 - STM32F103 例程 + CMSIS_5 / cmsis-device-f1 真实头文件（钉提交）✅
 - CH32V003 例程 + WCH 官方 SDK 真实头文件（钉提交）✅
-- 以上两步均带 `-DMOTE_TICKLESS=1 -DMOTE_PORT_HCLK_HZ=...`（例程已启用 tickless）
+- 以上两步均带 `-DMOTE_TICKLESS=1 -DMOTE_PORT_HCLK_HZ=...`（示例源码默认固定拍，CI 通过命令行全局启用 tickless）
+
+### 2.8 CH32V003 上板验证（MounRiver + WCH EVT SDK）
+
+硬件环境：CH32V003，HCLK=48MHz，LED 使用 PC0（外部上拉，低电平点亮），
+USART1 TX=PD5，115200。工程基于 WCH 官方裸机 EVT 例程迁移，下载目标和
+map 文件均按对应 Stage 工程核对。
+
+| 阶段 | 覆盖内容 | 实测结论 |
+|---|---|---|
+| Stage1 | 固定拍 SysTick、串口、PC0 LED | 串口持续输出，LED 500ms 闪烁 |
+| Stage2 | 多定时器负载、printf 路径 | 10 分钟 `drop=0` |
+| Stage3 | 队列压力、满队丢弃计数 | 16 槽队列按预期接收 16、丢弃 16 |
+| Stage4 | `post_replace` latest-wins | replace 全成功，full 策略按预期失败，`err=0` |
+| Stage5 | delayed post/replace/cancel | 每周期计数符合预期，`drop=0 err=0` |
+| Stage6 | mailbox API 压力 | ok/full/param/msg/drop 均符合预期，校验和一致 |
+| Stage7 | task API | fast/mid/slow 与 tick 推导值一致，`api_err=0 drop=0 err=0` |
+| Stage8 | timer control API | start/stop/restart/once/periodic 控制路径通过 |
+| Stage9 | drop hook 与非法事件 | drop hook 与非法 ID 路径通过 |
+| Stage10 | `mote_loop` / `mote_sleep` / `mote_next_due` | `next`/`due_bad` 符合预期，LED 与 heartbeat 正常 |
+| Stage11 | tickless 入账（无 WFI） | SysTick 重装/追平路径通过 |
+| Stage12 | 综合 tickless 长跑（无 WFI） | 修正测试期望的 `uint8_t` 校验和回绕后，长跑 `err=0` |
+| Stage13 | WFI 唤醒（IRQ enabled） | raw wfi 与 WCH `__WFI()` 均可被 SysTick 唤醒，`irq_bad=0 err=0` |
+| Stage14 | WCH `__WFI()` 在关中断入口下的行为 | `__WFI()` 可睡眠并唤醒，返回后中断开启，`ret_dis=0 irq_bad=0 err=0` |
+| Stage15 | 综合 tickless + WCH `__WFI()` 长跑 | 跑到 671000 ticks，所有 a/b 字段相等，`bad=0/0/0 api_err=0 drop=0 err=0` |
+
+Stage15 构建体积：FLASH 9628 B / 16 KB（58.76%），RAM 880 B / 2 KB（42.97%）。
+这说明综合压测工程能装进 CH32V003，但 2KB RAM 余量有限，产品代码仍需看
+map 文件和栈深。
 
 ---
 
@@ -266,6 +296,8 @@ handler 派发链路完整。tickless 档另验证（时间膨胀，1 tick-ms = 
 | 内存安全/无 UB | ASan/UBSan（CI，Ubuntu） | 中（CI 环境，非板级） |
 | 启动链正确（向量表/SysTick/tick→定时器→事件流） | QEMU 冒烟（Cortex-M3，固定拍） | 中（模拟器，非真硅片） |
 | tickless 空闲路径（长拍重装/时基追平/无漂移） | QEMU tickless 冒烟（Cortex-M3） | 中（模拟器，非真硅片） |
+| CH32V003 固定拍与 API 上板行为 | Stage1-10 串口/LED/计数器实测 | 强（CH32V003 实板，手动） |
+| CH32V003 tickless/WFI 唤醒行为 | Stage11-15，含关中断入口 `__WFI()` 与综合长跑 | 强（CH32V003 实板，手动） |
 | 三内核可编译、体积分账受控（三件套+移植层） | 交叉编译 + 分账体积断言（含 tickless 档） | 强 |
 | 覆盖无大面积盲区 | 行覆盖 93.7%（门槛 85%） | 中 |
 | 无静态分析告警 | cppcheck 0 告警 | 中 |
@@ -278,20 +310,27 @@ handler 派发链路完整。tickless 档另验证（时间膨胀，1 tick-ms = 
 
 1. **中断延迟数字**：usage.md 附录 A 的微秒级估算**没有任何实测数据背书**，
    必须按板级检查清单用 DWT/示波器实测
-2. **低功耗行为**：WFI 在关中断下到底睡不睡、pending 能否唤醒——
-   尤其青稞 INTSYSCR 与 WFI 的交互——未经任何真实芯片验证
-3. **真实硬件时序**：临界区时长、tick 抖动、相位漂移的**实际值**，
+2. **低功耗电流数字**：CH32V003 已验证 WCH `__WFI()` 可睡眠并被 SysTick
+   唤醒，但还没有测出板级/芯片级电流数值；LED、串口、稳压器、调试器都会
+   把真实电流抬高，必须按目标板实测
+3. **其他芯片的 WFI 行为**：CH32V003 以外的 WCH/ARM 目标仍需独立上板验证，
+   不能把 CH32V003 的结论外推成全系列保证
+4. **真实硬件时序**：临界区时长、tick 抖动、相位漂移的**实际值**，
    宿主机测试与 QEMU 都测不出来
-4. **M0+/RV32 的启动链**：QEMU 冒烟只覆盖 Cortex-M3 一条链
-5. **断言负向路径**：没做过"故意触发断言"的测试（需进程级用例）
+5. **M0+/其他 RV32 的启动链**：QEMU 冒烟只覆盖 Cortex-M3 一条链，CH32V003
+   覆盖一条 WCH RV32 链；其余芯片仍需实板
+6. **断言负向路径**：没做过"故意触发断言"的测试（需进程级用例）
 
 ### 3.3 总体结论
 
 - **内核逻辑是可信的**：API 语义、并发一致性（建模语义下）、边界校验、
   内存安全（CI）、启动链（M3 模拟器）、可编译性、体积、覆盖率，均有
   自动化证据支撑——对一个 v0.x 开发预览项目，这已经是相当厚的验证层
-- **硬件行为是未知的**：中断延迟、低功耗、实板相位抖动等所有"真实世界"
-  数字全部悬空。**任何生产决策都不应基于未经板级验证的行为**
+- **CH32V003 功能路径已上板闭环**：固定拍、核心 API、tickless 入账、WCH
+  `__WFI()` 唤醒和综合长跑已通过；但中断延迟、电流、抖动这些量化指标仍需
+  仪器实测
+- **其他芯片仍不能直接背书**：CH32V003 的结论不能自动外推到 CH32V007/V203/V307
+  或 ARM 目标。生产决策必须基于目标芯片、目标板、目标时钟和目标外设连接的实测
 - 定位与 README「项目状态」一致：值得作为**学习项目与内核逻辑参考**使用；
   "生产就绪"不成立，上板前必须按 `docs/porting.md` 第 7 章检查清单完成验证
 

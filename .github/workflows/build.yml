@@ -157,8 +157,8 @@ jobs:
           git -C /tmp/cmsis-f1 remote add origin https://github.com/STMicroelectronics/cmsis-device-f1
           git -C /tmp/cmsis-f1 fetch --depth 1 origin c8e9a4a4f16b6d2cb2a2083cbe5161025280fb22
           git -C /tmp/cmsis-f1 checkout --detach FETCH_HEAD
-          # 例程启用了 tickless：这两个宏必须工程级全局生效（例程 main.c 内的
-          # define 只作用于该文件，mote_port.c 靠命令行 -D 拿到同值）
+          # 示例源码默认固定拍；CI 在命令行工程级启用 tickless，确保
+          # mote_port.c 与 example main.c 看到同一组宏。
           arm-none-eabi-gcc -std=c99 -Wall -Wextra -Werror -mcpu=cortex-m3 -mthumb \
             -DMOTE_TICKLESS=1 -DMOTE_PORT_HCLK_HZ=72000000u \
             -c moteos/mote.c moteos/mote_task.c moteos/mote_mail.c moteos/port/mote_port.c \
@@ -176,7 +176,7 @@ jobs:
           git -C /tmp/ch32v003 checkout --detach FETCH_HEAD
           SDK=/tmp/ch32v003/EVT/EXAM/SRC
           USER=/tmp/ch32v003/EVT/EXAM/ADC/ADC_DMA/User
-          # 例程启用了 tickless：宏须工程级全局生效（-D 与 main.c 内定义同值）
+          # 示例源码默认固定拍；CI 在命令行工程级启用 tickless。
           riscv-none-elf-gcc -std=c99 -Wall -Wextra -Werror -march=rv32imc_zicsr_zifencei -mabi=ilp32 \
             -DMOTE_TICKLESS=1 -DMOTE_PORT_HCLK_HZ=48000000u \
             -c moteos/mote.c moteos/mote_task.c moteos/mote_mail.c moteos/port/mote_port.c \

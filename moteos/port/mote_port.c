@@ -7,6 +7,16 @@
 
 #include "mote.h"
 
+#if defined(MOTE_PORT_CH32)
+#define MOTE_SYSTICK_IRQ_ATTR __attribute__((interrupt("WCH-Interrupt-fast")))
+static void mote_ch32_systick_clear(void)
+{
+    SysTick->SR = 0;
+}
+#else
+#define MOTE_SYSTICK_IRQ_ATTR
+#endif
+
 #ifdef MOTE_PORT_HOST
 
 #include <stdlib.h>
@@ -103,7 +113,12 @@ static bool mote_systick_matched(void)
 #if defined(MOTE_PORT_CORTEXM)
     return (MOTE_SYST_CTRL & 0x00010000u) != 0u;
 #else
-    return (SysTick->SR & 1u) != 0u;
+    bool matched = (SysTick->SR & 1u) != 0u;
+
+    if (matched) {
+        mote_ch32_systick_clear();
+    }
+    return matched;
 #endif
 }
 
@@ -183,9 +198,13 @@ static void mote_systick_set(uint32_t ms)
  * 重定义一个强符号 SysTick_Handler（记得在里面调用 mote_tick()
  * 或 mote_tick_advance()），链接器会自动选强符号，
  * 无需把 mote_port.c 从工程剔除 */
+MOTE_WEAK void SysTick_Handler(void) MOTE_SYSTICK_IRQ_ATTR;
 MOTE_WEAK void SysTick_Handler(void)
 {
     if (s_nap_cycles == 0u) {
+#if defined(MOTE_PORT_CH32)
+        mote_ch32_systick_clear();
+#endif
         mote_tick(); /* 启动后尚未 tickless 编程：固定拍 */
         return;
     }
@@ -234,7 +253,13 @@ void mote_idle(uint32_t next_due)
      *    只是失去低功耗收益） */
     mote_systick_set(nap);
     s_nap_ms = nap;
-#if defined(__CC_ARM)
+#if defined(MOTE_PORT_CH32)
+    /* WCH SDK __WFI() maps to the QingKe WFE sequence and has been
+     * board-verified to wake from SysTick even when entered with global
+     * interrupts masked; it returns with interrupts enabled, and the caller's
+     * mote_crit_exit() restores the saved state immediately afterwards. */
+    __WFI();
+#elif defined(__CC_ARM)
     __asm { wfi }
 #else
     __asm volatile ("wfi" ::: "memory");
@@ -246,15 +271,23 @@ void mote_idle(uint32_t next_due)
 /* 弱符号：用户已有自己的 SysTick（延时函数等）时，只需在工程里
  * 重定义一个强符号 SysTick_Handler（记得在里面调用 mote_tick()），
  * 链接器会自动选强符号，无需把 mote_port.c 从工程剔除 */
+MOTE_WEAK void SysTick_Handler(void) MOTE_SYSTICK_IRQ_ATTR;
 MOTE_WEAK void SysTick_Handler(void)
 {
+#if defined(MOTE_PORT_CH32)
+    mote_ch32_systick_clear();
+#endif
     mote_tick();
 }
 
 void mote_idle(uint32_t next_due)
 {
     (void)next_due;
-#if defined(__CC_ARM)
+#if defined(MOTE_PORT_CH32)
+    /* See the tickless CH32 branch above: use the WCH SDK sequence rather than
+     * raw wfi so entry from a MoteOS critical section remains wakeable. */
+    __WFI();
+#elif defined(__CC_ARM)
     __asm { wfi }
 #else
     __asm volatile ("wfi" ::: "memory");

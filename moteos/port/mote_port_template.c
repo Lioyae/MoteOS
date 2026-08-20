@@ -33,7 +33,7 @@
  *      mote_crit_exit(s)  恢复保存的状态（禁止无条件打开中断）
  *      mote_crit_active() 查询当前是否处于关中断（1=关）
  *    参考现成实现：Cortex-M 用 PRIMASK（port/cm0plus、port/cm3），
- *    WCH RISC-V 用 INTSYSCR（port/ch32v），AVR 用 SREG。
+ *    WCH RISC-V 用 mstatus（port/ch32v），AVR 用 SREG。
  *
  * 4) 提供 mote_assert_fail()：断言失败处理（默认 MOTE_ASSERT 开启）。
  *    可直接调用芯片复位，或在停机前记录 file/line。

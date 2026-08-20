@@ -210,13 +210,15 @@ typedef struct {
 #define MOTE_TASK_DEF(period_ms, handler, ctx) { (handler), (ctx), (period_ms) }
 
 void mote_task_init(const mote_task_desc_t *table, uint16_t count);
-/* 启动任务；描述符 period_ms 为 0 或 ≥2^31 时返回 MOTE_ERR_PARAM
- * （0 会退化为每 poll 同步调用，≥2^31 破坏回绕比较数学） */
+/* 启动任务；任务表为空、handler 为空、描述符 period_ms 为 0 或 ≥2^31
+ * 时返回 MOTE_ERR_PARAM（0 会退化为每 poll 同步调用，≥2^31 破坏回绕比较数学） */
 mote_status_t mote_task_start(uint16_t id);
 mote_status_t mote_task_stop(uint16_t id);
 
 /* 内部接口：由 mote_poll 调用 */
 void mote_process_tasks(void);
+/* 内部接口：供 mote_next_due()/tickless idle 纳入任务 deadline */
+uint32_t mote_task_next_due(void);
 
 #endif
 
