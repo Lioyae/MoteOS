@@ -804,7 +804,7 @@ static void step1(uint16_t evt, void *param, void *ctx)
 | `mote_event_post*`（含 `_delayed` / `_delayed_replace`） | 可以 | 可以 |
 | `mote_event_cancel_delayed` | 可以 | 可以 |
 | `mote_mail_send` | 可以 | 可以 |
-| `mote_tick` / `mote_tick_advance` | 可以（移植层专用） | 可以 |
+| `mote_port_systick_handler` / `mote_tick` / `mote_tick_advance` | 可以（移植层专用；应用自定义 SysTick 时优先调 `mote_port_systick_handler`） | 可以 |
 | `mote_next_due` | 可以 | 可以 |
 | `mote_ticks` / `mote_dropped_count` / `mote_set_drop_hook` | 可以（自带临界区） | 可以 |
 | `mote_timer_start/stop/restart` | 不行 | 可以 |
@@ -935,8 +935,8 @@ handler 里用 `evt` 参数区分是哪个纸条。
 2. 缩小 `MOTE_EVT_QUEUE_SIZE`（replace 扫描与它成正比）
 3. 大块数据改走"指针 + 所有权移交"（自己保证生命周期，不拷贝）
 
-> 本内核**没有任何官方板级实测数据**，使用前请自行测量并在你的预算内做决定。
-> 这两种实测方法是《移植教程》最终检查清单的正式步骤之一，两篇文档口径一致。
+> 本内核目前**没有官方中断延迟实测数据**，使用前请自行测量并在你的预算内做决定。
+> 低功耗板级电流已有 CH32V003 Stage16 记录，见附录 C；两者都必须按你的目标板复测。
 
 ---
 
@@ -1022,3 +1022,66 @@ void USART1_IRQHandler(void)
 handler 里调 `uart_send()` 只是几个字节的 memcpy 级操作，永远毫秒级返回——
 这才是"无阻塞延时 API"哲学在串口上的正确打开方式。
 
+---
+
+## 附录 C：CH32V003 低功耗测量速查（Stage16）
+
+Stage16 是专门给低功耗电流测量准备的最小例程，不是综合压测。它只保留一个
+2 秒周期事件，启动时串口打印一次，然后关闭 USART1，把 PD5/PD6 改成模拟输入。
+默认还会让 PC1 和 PC0 每 2 秒短脉冲一次，方便你确认"真的睡了又醒"。
+
+启动串口应该看到：
+
+```text
+==== MoteOS CH32V003 Stage16 ====
+low-power current measurement, tickless + WCH __WFI
+boot print only; USART off after this banner
+wake_ms=2000; marker_pc1=1; led_debug=1
+```
+
+如果串口还在持续打印，或者显示的不是 Stage16 / `wake_ms=2000`，先别测电流：
+你烧进去的不是当前这个低功耗测量版本。
+
+### C.1 示波器怎么接
+
+1. 低边串采样电阻：`电源 GND -> shunt -> 板子 GND`。
+2. 示波器测 shunt 两端电压，公式永远是 `I = Vshunt / Rshunt`。
+3. CH1 接 PC1，看每 2 秒一次的标记脉冲；CH2 接 shunt，看电流平台和尖峰。
+4. 先用默认诊断模式确认周期，再把 `STAGE16_MARKER_ENABLE` 和
+   `STAGE16_LED_DEBUG_ENABLE` 都改成 `0`，重新编译测最终电流。
+
+### C.2 这次 CH32V003 的读数
+
+| 采样电阻 | 波形电压 | 换算电流 | 现象 |
+|---|---:|---:|---|
+| 10Ω | 93.6mV | 9.36mA | 低平台 |
+| 10Ω | 105.6mV | 10.56mA | PC0 LED 亮平台 |
+| 10Ω | 123.2mV | 12.32mA | 唤醒/活动尖峰 |
+| 5Ω（两个 10Ω 并联） | 47.2mV | 9.44mA | 低平台 |
+| 5Ω（两个 10Ω 并联） | 53.0mV | 10.60mA | PC0 LED 亮平台 |
+| 5Ω（两个 10Ω 并联） | 61.6mV | 12.32mA | 唤醒/活动尖峰 |
+
+两种采样电阻得到的结果一致：低平台约 9.4mA，PC0 LED 亮时多约 1.2mA，
+唤醒/活动尖峰约 12.3mA。这个数字是**板级电流**，包含 LED、GPIO 标记、
+稳压器、调试器和外接模块，不是芯片裸片睡眠电流。
+
+### C.3 为什么 Stage16 有自己的 SysTick_Handler
+
+Stage16 在 `User/main.c` 里放了强符号 `SysTick_Handler`，目的是让 map 文件
+能证明向量表确实打到用户工程。它内部只做一件事：
+
+```c
+void SysTick_Handler(void)
+{
+    mote_port_systick_handler();
+}
+```
+
+真正的 fixed tick / tickless 入账仍然在 `moteos/port/mote_port.c` 里完成。
+因此 CH32 工程如果自定义 `SysTick_Handler`，配置里必须关闭 port 默认入口：
+
+```c
+#define MOTE_PORT_DEFAULT_SYSTICK_HANDLER 0
+```
+
+否则会有两个强符号 `SysTick_Handler`，链接时报 multiple definition。

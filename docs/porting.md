@@ -182,7 +182,7 @@ moteos/port/cm3/mote_port.h  ← 你的芯片对应 port 头文件，必须
 | 报错信息 | 原因 | 怎么改 |
 |---|---|---|
 | `cannot open source input file "mote.h"` | 头文件路径没加或加错 | 回 1.4 检查三条路径 |
-| `SysTick_Handler multiply defined` | 你的工程里有**两个强符号** SysTick_Handler（MoteOS 的是弱符号，不会引发此报错） | 只保留一个：要么用你自己的并在里面调 `mote_tick()`（见第 3 章），要么删掉自己的交给 MoteOS |
+| `SysTick_Handler multiply defined` | 你的工程里有**两个强符号** SysTick_Handler。Cortex-M port 默认弱符号；CH32 port 默认强符号接管 WCH 启动文件 | 只保留一个入口。Cortex-M 可直接用自己的 handler；CH32 若要自定义 handler，工程级定义 `MOTE_PORT_DEFAULT_SYSTICK_HANDLER=0`，并在里面调 `mote_port_systick_handler()`（见第 3 章） |
 | `'NULL' undeclared` | 老版本 mote.h 缺 `<stddef.h>` | 更新 MoteOS 到最新（已修复） |
 | `USART1_IRQHandler multiply defined` | 你的代码里也写了串口中断函数 | 二选一：删掉其中一个，或把 `mote_mail_send` 加进你自己的 USART1_IRQHandler 里 |
 | `GPIO_CNF_... undeclared` | 你用的库没有 ST 老版寄存器宏 | 用你 SDK 自带的外设库函数写初始化（参考第 5 章） |
@@ -190,7 +190,8 @@ moteos/port/cm3/mote_port.h  ← 你的芯片对应 port 头文件，必须
 > "符号" = 程序里每一个有名字的东西（函数名、变量名）。链接（拼装）时要核对名字，
 > 重名就打架。`multiply defined` = "这个名字出现了两次，我不知道该听谁的"。
 > 而"弱符号/强符号"是解决重名打架的规矩：**弱的是替身，强的是本尊；本尊一出场，替身自动让位**。
-> MoteOS 自带的 `SysTick_Handler` 就是替身，你自己写的才是本尊——所以第 3 章的办法才能成立。
+> 但 CH32V003 的 WCH 启动文件本身也使用弱别名，实测中弱符号接管不如强符号稳妥；
+> 因此 CH32 port 默认由 MoteOS 强接管 `SysTick_Handler`，自定义时要显式关掉默认入口。
 
 ### 1.8 下载验证
 
@@ -295,25 +296,46 @@ moteos/port/ch32v/mote_port.h   ← 注意：RISC-V 用 ch32v 目录！
 自己的外设库），不想推倒重来，只想让 MoteOS"住进来"。好消息是：MoteOS 是客气的房客，
 你家的装修它一样不动——只借三个接口。
 
-先回忆第 1 章讲的规矩：MoteOS 自带的 `SysTick_Handler` 是**弱符号（替身）**，
-你自己工程里的 `SysTick_Handler` 是**强符号（本尊）**。链接时替身见本尊就自动让位，
-不会打架报错。于是接入方案变得极简：
+先把平台差异说清楚：
 
-1. `mote_port.c` **照常加入工程**——它的 `SysTick_Handler` 是**弱符号**，
-   你自己的强符号 `SysTick_Handler` 会直接覆盖它，链接不报冲突
-2. 在你自己的 SysTick 中断函数（一般在 `stm32f10x_it.c` 或 `main.c`）里加一行：
+- **Cortex-M0+/M3**：`mote_port.c` 自带的 `SysTick_Handler` 是弱符号。你自己的
+  强符号同名函数会覆盖它，链接不冲突。
+- **CH32V003/V007/V203/V307**：WCH 启动文件也使用弱别名。为了让向量表稳定打到
+  MoteOS，CH32 port 默认用强符号接管 `SysTick_Handler`。如果你的工程已有
+  `SysTick_Handler`，必须工程级定义 `MOTE_PORT_DEFAULT_SYSTICK_HANDLER=0`，
+  再由你的 handler 转调 `mote_port_systick_handler()`。
+
+接入方案：
+
+1. `mote_port.c` **照常加入工程**。不要因为已有 SysTick 就把它删掉；里面还有
+   `mote_idle()`、tickless 入账状态机和默认断言处理。
+2. 在你自己的 SysTick 中断函数（一般在 `stm32f10x_it.c` 或 `main.c`）里调用
+   `mote_port_systick_handler()`，不要在 tickless 工程里直接调用 `mote_tick()`：
 
 ```c
 void SysTick_Handler(void)
 {
-    mote_tick();   /* ← 就加这一行（固定拍；tickless 工程按 4.3 协议
-                    *    调用 mote_tick_advance 并恢复固定拍重装） */
+    mote_port_systick_handler();  /* 固定拍/tickless 都走同一个 port 入口 */
     // ...你原来的代码，比如 Delay_Dec() 之类
 }
 ```
 
+CH32 工程如果要自己写这个函数，用 WCH 快中断属性，并在工程宏定义或
+`mote_config.h` 里关闭 port 默认入口：
+
+```c
+#define MOTE_PORT_DEFAULT_SYSTICK_HANDLER 0
+
+void SysTick_Handler(void) __attribute__((interrupt("WCH-Interrupt-fast")));
+void SysTick_Handler(void)
+{
+    mote_port_systick_handler();
+}
+```
+
 > 白话解释：SysTick 报时器每次响铃，电话都会打到这个函数（向量表里登记的）。
-> 现在你只在开门时多喊一嗓子 `mote_tick()`——告诉内核"过了一拍"。
+> 现在你只在开门时多喊一嗓子 `mote_port_systick_handler()`——固定拍下它会
+> 帮你调用 `mote_tick()`，tickless 下它还会处理长拍入账、清标志和恢复固定拍。
 > 你原来开门时干的活（延时计数之类的）原样保留，互不打扰。
 
 3. 空闲时的 wfi **不需要你写**：`mote_port.c` 自带的 `mote_idle()` 就是一条
@@ -500,19 +522,21 @@ void mote_idle(uint32_t next_due)
    > 模拟器当成"有新动静"而马上唤醒——芯片于是退化成"睁眼发呆"的轮询，
    > 但账照样算得对，只是省电的好处没了。真芯片上是否发生要实测。
 
-4. **SysTick 中断处理**（弱符号 `SysTick_Handler`，用户可重定义强符号接管）
-   负责把满拍时长入账（`mote_tick_advance`）并恢复固定拍重装。
+4. **SysTick 中断处理**负责把满拍时长入账（`mote_tick_advance`）并恢复固定拍重装。
+   Cortex-M port 默认提供弱符号 `SysTick_Handler`；CH32 port 默认提供强符号
+   `SysTick_Handler`（可用 `MOTE_PORT_DEFAULT_SYSTICK_HANDLER=0` 关闭）。
    wrap 判别靠 COUNTFLAG/CNTIF 读清零：ISR 与 idle 追平谁先读到标志
    谁入账整拍，另一方只入账部分拍——互斥不重复。
-   若用户重定义了 SysTick_Handler，记得自行调用 `mote_tick()`
-   （固定拍）或按同样协议 `mote_tick_advance()`（tickless）。
+   若用户重定义了 `SysTick_Handler`，请调用 `mote_port_systick_handler()`。
+   它在固定拍下调用 `mote_tick()`，在 tickless 下处理清标志、长拍入账、
+   周期余数和固定拍恢复。tickless 工程不要直接调用 `mote_tick()`。
 
    > 白话解释：表转完一圈会举个小旗子（COUNTFLAG/CNTIF 标志）。开门的人
    > 和睡觉前结账的人谁先看到旗子，谁就把"一整拍"记进账本，并把旗子放倒；
    > 后到的那位只记"零头"。旗子被放倒后谁都看得到它倒过——这就保证
-   > **每一拍恰好被记一次账，不会被两个人记两遍**。这里的函数是弱符号
-   > （替身），你自己写同名函数（本尊）就会接管它——接管后记得自己按
-   > 上面两种模式（固定拍 / tickless）把账记上。
+   > **每一拍恰好被记一次账，不会被两个人记两遍**。如果你接管
+   > `SysTick_Handler`，不要自己重新实现这套账本，直接调用
+   > `mote_port_systick_handler()`。
 
 **tickless 板级验证清单**（换芯片/换板子仍要逐项实测）：
 
@@ -526,7 +550,8 @@ void mote_idle(uint32_t next_due)
 
 > CH32V003 已完成上述功能性验证：Stage11/12 覆盖 tickless 入账与综合无 WFI
 > 长跑，Stage13/14 覆盖 WFI 唤醒和关中断入口，Stage15 覆盖 tickless + WCH
-> `__WFI()` 综合长跑。低功耗**电流数值**仍需按你的板子单独测。
+> `__WFI()` 综合长跑，Stage16 覆盖启动后关串口的低功耗测量路径。当前已有
+> 板级电流记录，但芯片级电流仍需按你的板子单独测。
 
 > 白话解释最后一条清单里的"时钟树"：芯片的主频像一棵树的树干，
 > 各个外设的时钟是树枝，都能独立分叉调速。你的主频可能开机后被代码
@@ -811,7 +836,9 @@ int main(void)
 handler 运行在主循环上下文，所以**全部 API 都能调**：`mote_event_post*`、`mote_mail_send/recv`、`mote_timer_start/stop`、`mote_task_start/stop` 都没问题。
 
 **Q4：中断里能调什么？**
-只有 `mote_event_post*`、`mote_mail_send`、`mote_tick`。定时器、任务 API 都只能在主循环上下文用。
+普通外设中断里只调 `mote_event_post*`、`mote_mail_send`。SysTick 中断入口调
+`mote_port_systick_handler()`（固定拍时内部会调 `mote_tick()`；tickless 时还会
+处理长拍入账）。定时器、任务 API 都只能在主循环上下文用。
 
 > 白话补充：开门的人（中断）只许递纸条、放货、记心跳；闹钟、打卡机这些
 > "调度"性质的活只能由主循环来办。这不是限制，是设计——开门越快，大家等得越短。
@@ -867,7 +894,8 @@ tick 变成 10ms 一拍，重装值应按 `floor(SystemCoreClock * MOTE_TICK_MS 
 
 - [ ] 编译 0 error 0 warning（开 `-Wall -Wextra -Werror`，与 CI 同口径）
 - [ ] 内核体积核对：map 文件里内核三件套 text <2.75KB（RV32）/ <2.5KB（M0+）、移植层 port text <512B、RAM <512B（本机实测 M0+ 三件套 2297B / port 14B / RAM 280B，见 README 与 docs/test.md；体积随工具链版本小幅浮动，以 CI 阈值与你自己 map 文件为准）
-- [ ] map 文件里 `SysTick_Handler` 只出现一次（在 mote_port.o 里）
+- [ ] map 文件里 `SysTick_Handler` 只出现一次：默认应在 `mote_port.o`；若应用自定义，
+      应在应用目标文件里，并确认内部调用 `mote_port_systick_handler()`
 - [ ] LED 闪烁周期用逻辑分析仪/示波器实测 ≈ 设定值
 - [ ] **中断延迟实测**：DWT CYCCNT 或 GPIO 示波器测 `mote_mail_send` 最坏路径（方法见使用教程附录 A），确认符合你的延迟预算
 - [ ] **低功耗唤醒实测**（RISC-V 青稞必做）：空闲电流明显下降（wfi 生效）+ tick 准时唤醒、事件不睡过头
@@ -926,6 +954,41 @@ tick 变成 10ms 一拍，重装值应按 `floor(SystemCoreClock * MOTE_TICK_MS 
 CH32V003 + PC0 LED 的特别提醒：你的 LED 是外部上拉、低电平点亮，LED 亮时电流
 会明显盖过 MCU 睡眠电流。粗算 `I_LED = (VDD - Vf) / R`，例如 3.3V、红灯 Vf
 约 2.0V、1kΩ 上拉，LED 亮时就是约 1.3mA。要测低功耗，不要让 LED 一直参与。
+
+### 7.2 CH32V003 Stage16 低功耗测量步骤
+
+Stage15 是综合压测工程：它每秒打印、LED 闪烁、任务/邮箱/延时投递都在跑，
+适合验证稳定性，不适合测干净电流。测电流请用 Stage16 这种专用工程：
+
+1. 编译并烧录 Stage16。串口启动信息必须包含：
+   ```text
+   wake_ms=2000; marker_pc1=1; led_debug=1
+   ```
+   如果还是 `Stage12/Stage15`，或不是 `wake_ms=2000`，说明烧录目标文件选错。
+2. 复位后只看一次启动打印。打印结束后 USART1 会关闭，PD5/PD6 进入模拟输入。
+3. 示波器 CH1 接 PC1，看每 2 秒一次的唤醒标记脉冲；CH2 接 shunt 电压，看
+   低平台、LED 平台和唤醒尖峰。
+4. PC0 LED 是低电平点亮，默认每 2 秒短亮一次，只用于确认调度。最终测干净
+   电流前，把 `STAGE16_MARKER_ENABLE` 和 `STAGE16_LED_DEBUG_ENABLE` 都改成
+   `0`，重新编译再测。
+5. 计算电流：`I = Vshunt / Rshunt`。两个 10Ω 并联就是 5Ω；单个 10Ω 就按 10Ω
+   算。不要把 5Ω 的电压当 10Ω 算，否则电流会差一倍。
+
+本轮 CH32V003 板级实测结果：
+
+| 采样电阻 | 波形电压 | 换算电流 | 现象 |
+|---|---:|---:|---|
+| 10Ω | 93.6mV | 9.36mA | 低平台 |
+| 10Ω | 105.6mV | 10.56mA | PC0 LED 亮平台 |
+| 10Ω | 123.2mV | 12.32mA | 唤醒/活动尖峰 |
+| 5Ω（两个 10Ω 并联） | 47.2mV | 9.44mA | 低平台 |
+| 5Ω（两个 10Ω 并联） | 53.0mV | 10.60mA | PC0 LED 亮平台 |
+| 5Ω（两个 10Ω 并联） | 61.6mV | 12.32mA | 唤醒/活动尖峰 |
+
+这说明当前板子的低平台大约 9.4mA，LED 额外约 1.2mA，唤醒/活动尖峰约
+12.3mA。这个数是**板级电流**，不是 CH32V003 裸片睡眠电流；要测裸片级别，
+需要断开 LED、串口转换器、调试器供电路径和其他外部负载，并确认电源路径只
+经过 MCU。
 
 全部打勾，恭喜：这颗芯片的 MoteOS 移植完成。欢迎把实测数据回馈给仓库，
 让下一颗芯片的移植者少踩一个坑。

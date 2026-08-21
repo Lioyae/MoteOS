@@ -13,6 +13,12 @@ static void mote_ch32_systick_clear(void)
 {
     SysTick->SR = 0;
 }
+#ifndef MOTE_PORT_DEFAULT_SYSTICK_HANDLER
+#define MOTE_PORT_DEFAULT_SYSTICK_HANDLER 1
+#endif
+#if MOTE_PORT_DEFAULT_SYSTICK_HANDLER != 0 && MOTE_PORT_DEFAULT_SYSTICK_HANDLER != 1
+#error "MOTE_PORT_DEFAULT_SYSTICK_HANDLER must be 0 or 1"
+#endif
 #else
 #define MOTE_SYSTICK_IRQ_ATTR
 #endif
@@ -213,15 +219,26 @@ void mote_port_systick_handler(void)
     }
 }
 
-/* 弱符号：用户已有自己的 SysTick（延时函数等）时，只需在工程里
- * 重定义一个强符号 SysTick_Handler，并在里面调用
- * mote_port_systick_handler()。tickless 下不要只调用 mote_tick()，
- * 否则长拍入账状态会和 port 层脱节。 */
+/* CH32V003 的 WCH startup 会把 SysTick_Handler 弱别名到默认入口，
+ * 旧的同名弱定义不一定能稳定接管向量；CH32 port 默认用强符号接管。
+ * 工程已有自己的 SysTick_Handler 时，定义 MOTE_PORT_DEFAULT_SYSTICK_HANDLER=0，
+ * 并在自定义入口里调用 mote_port_systick_handler()。tickless 下不要只调用
+ * mote_tick()，否则长拍入账状态会和 port 层脱节。 */
+#if defined(MOTE_PORT_CH32)
+#if MOTE_PORT_DEFAULT_SYSTICK_HANDLER
+void MOTE_SYSTICK_IRQ_ATTR SysTick_Handler(void);
+void MOTE_SYSTICK_IRQ_ATTR SysTick_Handler(void)
+{
+    mote_port_systick_handler();
+}
+#endif
+#else
 MOTE_WEAK void SysTick_Handler(void) MOTE_SYSTICK_IRQ_ATTR;
 MOTE_WEAK void SysTick_Handler(void)
 {
     mote_port_systick_handler();
 }
+#endif
 
 void mote_idle(uint32_t next_due)
 {
@@ -281,14 +298,25 @@ void mote_port_systick_handler(void)
     mote_tick();
 }
 
-/* 弱符号：用户已有自己的 SysTick（延时函数等）时，只需在工程里
- * 重定义一个强符号 SysTick_Handler，并在里面调用
- * mote_port_systick_handler()。 */
+/* CH32V003 的 WCH startup 会把 SysTick_Handler 弱别名到默认入口，
+ * 旧的同名弱定义不一定能稳定接管向量；CH32 port 默认用强符号接管。
+ * 工程已有自己的 SysTick_Handler 时，定义 MOTE_PORT_DEFAULT_SYSTICK_HANDLER=0，
+ * 并在自定义入口里调用 mote_port_systick_handler()。 */
+#if defined(MOTE_PORT_CH32)
+#if MOTE_PORT_DEFAULT_SYSTICK_HANDLER
+void MOTE_SYSTICK_IRQ_ATTR SysTick_Handler(void);
+void MOTE_SYSTICK_IRQ_ATTR SysTick_Handler(void)
+{
+    mote_port_systick_handler();
+}
+#endif
+#else
 MOTE_WEAK void SysTick_Handler(void) MOTE_SYSTICK_IRQ_ATTR;
 MOTE_WEAK void SysTick_Handler(void)
 {
     mote_port_systick_handler();
 }
+#endif
 
 void mote_idle(uint32_t next_due)
 {

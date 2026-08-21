@@ -1,5 +1,33 @@
 # 更新日志
 
+## 未发布（2026-08-21，CH32V003 上板同步）
+
+### 修复
+
+- **CH32 port 默认强接管 `SysTick_Handler`**：WCH 启动文件会把
+  `SysTick_Handler` 弱别名到默认入口，单靠 port 里的同名弱定义不一定能稳定
+  接管向量。CH32 port 现在默认提供强符号入口；已有自定义 SysTick 的工程可
+  工程级定义 `MOTE_PORT_DEFAULT_SYSTICK_HANDLER=0`，并在自定义入口中调用
+  `mote_port_systick_handler()`。Cortex-M port 仍保持弱符号入口。
+- **Stage16 低功耗例程配置补强**：示例自己的 `SysTick_Handler` 用于确认
+  向量表命中用户工程，因此配置固定 `MOTE_PORT_DEFAULT_SYSTICK_HANDLER=0`，
+  避免和 CH32 port 默认入口产生 multiple definition。
+
+### 验证
+
+- CH32V003 Stage16 低功耗测量例程：启动只打印一次，随后关闭 USART1，
+  默认每 2 秒输出 PC1 标记脉冲并短亮 PC0；构建体积 FLASH 3212B /
+  RAM 396B。
+- CH32V003 板级电流记录：10Ω 与两个 10Ω 并联两组 shunt 数据互相吻合，
+  低平台约 9.4mA，PC0 LED 亮平台约 10.6mA，唤醒/活动尖峰约 12.3mA。
+  该数字包含板载/外接负载，不代表芯片裸片睡眠电流。
+
+### 文档
+
+- README、`docs/test.md`、`docs/porting.md`、`docs/usage.md` 同步 Stage1-16
+  上板结论、Stage16 烧录/波形/电流测量步骤，以及 CH32 自定义
+  `SysTick_Handler` 的正确接入方式。
+
 ## 未发布（2026-08-13，独立技术评审整改）
 
 按外部技术评审（掉计数口径、钩子重入、tickless 覆盖、体积口径、契约文案）

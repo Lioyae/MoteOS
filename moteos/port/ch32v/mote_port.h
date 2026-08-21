@@ -41,9 +41,18 @@
 
 typedef uint32_t mote_crit_state_t;
 
-/* 弱符号关键字：mote_port.c 的 SysTick_Handler 用弱符号定义，
- * 用户已有 SysTick 时直接重定义强符号即可接管，无需剔除 mote_port.c */
+/* 弱符号关键字：mote_port.c 的 mote_assert_fail 默认实现使用。
+ * SysTick_Handler 默认是强符号；工程已有 SysTick 时定义
+ * MOTE_PORT_DEFAULT_SYSTICK_HANDLER=0 后自行转调 mote_port_systick_handler()。 */
 #define MOTE_WEAK __attribute__((weak))
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+void mote_port_systick_handler(void);
+#ifdef __cplusplus
+}
+#endif
 
 static inline mote_crit_state_t mote_crit_enter(void)
 {

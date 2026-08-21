@@ -38,6 +38,13 @@
 #define MOTE_PORT_HCLK_HZ 48000000u
 #endif
 
+/* Stage16 deliberately provides SysTick_Handler in User/main.c so a map file
+ * can prove that the vector reaches the application entry. The handler then
+ * calls mote_port_systick_handler(), keeping tickless accounting in the port. */
+#ifndef MOTE_PORT_DEFAULT_SYSTICK_HANDLER
+#define MOTE_PORT_DEFAULT_SYSTICK_HANDLER 0
+#endif
+
 #ifndef MOTE_TIMER_CATCHUP_MAX
 #define MOTE_TIMER_CATCHUP_MAX 1000
 #endif
@@ -70,6 +77,9 @@ void mote_assert_fail(const char *file, int line);
 #endif
 #if MOTE_TICKLESS && MOTE_PORT_HCLK_HZ < 1000
 #error "MOTE_TICKLESS requires MOTE_PORT_HCLK_HZ >= 1000"
+#endif
+#if MOTE_PORT_DEFAULT_SYSTICK_HANDLER != 0
+#error "Stage16 owns SysTick_Handler; keep MOTE_PORT_DEFAULT_SYSTICK_HANDLER=0"
 #endif
 
 #endif

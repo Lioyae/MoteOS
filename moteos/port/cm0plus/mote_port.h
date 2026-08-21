@@ -29,6 +29,16 @@ typedef uint32_t mote_crit_state_t;
 #define MOTE_WEAK __attribute__((weak))
 #endif
 
+/* 内置 SysTick 入口与应用自定义入口共用的时基处理函数。
+ * 自定义 SysTick_Handler 时应调用它，而不是在 tickless 下直接调用 mote_tick()。 */
+#ifdef __cplusplus
+extern "C" {
+#endif
+void mote_port_systick_handler(void);
+#ifdef __cplusplus
+}
+#endif
+
 static inline mote_crit_state_t mote_crit_enter(void)
 {
     mote_crit_state_t s;
